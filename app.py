@@ -2255,16 +2255,56 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     benif_bar.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.05)", zeroline=False)
 
     # Anemia pie
-    anemia_counts = df["anemia_category"].value_counts()
+    # Use explicit counts to ensure alignment with KPI cards
+    # "Normal" here represents "Non-Anemic" (Total - Anemic) to match the "100 - Prevalence" logic
+    non_anemic_count = filtered_total - (mild + moderate + severe)
+    
+    # Define explicit data for the pie to match KPIs exactly
+    pie_labels = ["Normal", "Mild", "Moderate", "Severe"]
+    pie_values = [non_anemic_count, mild, moderate, severe]
+    pie_colors = [color_map["normal"], color_map["mild"], color_map["moderate"], color_map["severe"]]
+    
+    # Get pre-calculated balanced percentages for display text
+    # This ensures the pie chart shows the EXACT same % as the cards
+    pie_texts = [
+        f"{balanced_pcts['normal']}%",
+        f"{balanced_pcts['mild']}%",
+        f"{balanced_pcts['moderate']}%",
+        f"{balanced_pcts['severe']}%"
+    ]
+    
+    # Filter out zero values to avoid messy empty slices
+    final_labels = []
+    final_values = []
+    final_colors = []
+    final_texts = []
+    
+    for l, v, c, t_str in zip(pie_labels, pie_values, pie_colors, pie_texts):
+        if v > 0:
+            final_labels.append(l)
+            final_values.append(v)
+            final_colors.append(c)
+            final_texts.append(t_str)
+
+    if not final_values:
+        # Fallback for empty data
+        final_labels = ["No Data"]
+        final_values = [1]
+        final_colors = ["#e2e8f0"]
+        final_texts = [""]
+
     anemia_pie = go.Figure(go.Pie(
-        labels=[str(l).capitalize() for l in anemia_counts.index],
-        values=anemia_counts.values,
+        labels=final_labels,
+        values=final_values,
         hole=0.6,
-        marker=dict(colors=[color_map.get(str(l).lower(), "#cbd5e1") for l in anemia_counts.index],
-                    line=dict(color='white', width=3)), # Wider border for pie focus
-        textinfo="percent",
-        hovertemplate="<b>%{label}</b><br>Count: <b>%{value}</b> (%{percent})<extra></extra>",
-        opacity=0.95
+        marker=dict(colors=final_colors,
+                    line=dict(color='white', width=3)),
+        # Use 'text' to force our pre-calculated percentages instead of Plotly's auto-calc
+        text=final_texts,
+        textinfo="percent" if not final_texts[0] else "label+text", 
+        hovertemplate="<b>%{label}</b><br>Count: <b>%{value}</b> (%{text})<extra></extra>",
+        opacity=0.95,
+        sort=False # Keep order: Normal -> Mild -> Mod -> Severe
     ))
     anemia_pie.update_layout(
         template=t["plotly"],
@@ -3330,5 +3370,4 @@ app.clientside_callback(
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
 
