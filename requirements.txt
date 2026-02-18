@@ -1,0 +1,9 @@
+dash
+dash-bootstrap-components
+pandas
+requests
+plotly
+openpyxl
+gunicorn
+waitress
+Flask
