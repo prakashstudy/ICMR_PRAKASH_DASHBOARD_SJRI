@@ -1233,3 +1233,110 @@ body:not(.light-theme) .dash-spreadsheet-container .dash-spreadsheet .dash-cell:
     /* Slightly smaller for mobile */
     object-fit: contain;
 }
+/* ==========================================================================
+   UNIVERSAL DROPDOWN STYLING (Fix for Render/Dash 2.0+)
+   ========================================================================== */
+
+.Select-control,
+.Select__control,
+.virtualized-select-option,
+.Select-multi-value-wrapper,
+.Select__multi-value__label {
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 12px !important;
+    background-color: var(--select-bg) !important;
+    padding: 2px 8px !important;
+    color: var(--text-main) !important;
+    box-shadow: none !important;
+}
+
+.Select-menu-outer,
+.Select__menu,
+.Select__menu-list {
+    display: block !important;
+    border: 1px solid var(--glass-border) !important;
+    background-color: var(--sidebar-bg) !important;
+    backdrop-filter: blur(20px);
+    border-radius: 0 0 12px 12px !important;
+    margin-top: 4px !important;
+    box-shadow: var(--shadow-md) !important;
+    z-index: 9999 !important;
+}
+
+.Select__menu-list,
+.Select-menu {
+    height: auto !important;
+    max-height: 250px !important;
+    min-height: 50px !important;
+    overflow-y: auto !important;
+    background-color: var(--sidebar-bg) !important;
+    padding: 0 !important;
+}
+
+.Select-menu-outer,
+.Select__menu {
+    height: auto !important;
+    max-height: 255px !important;
+    overflow: visible !important;
+    z-index: 99999 !important;
+    background-color: var(--sidebar-bg) !important;
+}
+
+.Select-menu::-webkit-scrollbar,
+.Select__menu-list::-webkit-scrollbar {
+    width: 6px !important;
+    display: block !important;
+}
+
+.Select-menu::-webkit-scrollbar-track,
+.Select__menu-list::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.2) !important;
+}
+
+.Select-menu::-webkit-scrollbar-thumb,
+.Select__menu-list::-webkit-scrollbar-thumb {
+    background: var(--primary-color) !important;
+    border-radius: 10px !important;
+}
+
+.sidebar,
+.sidebar-tile,
+.filter-group,
+.dash-dropdown,
+.Select,
+.Select-container {
+    overflow: visible !important;
+}
+
+.is-focused .Select-control,
+.Select__control--is-focused,
+.Select__control:hover {
+    border-color: var(--primary-color) !important;
+    background-color: var(--select-focused-bg) !important;
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15) !important;
+}
+
+.Select-value-label,
+.Select-placeholder,
+.Select-input>input,
+.Select__single-value,
+.Select__placeholder,
+.Select__input-container,
+.Select__multi-value__label {
+    color: var(--text-main) !important;
+}
+
+.VirtualizedSelectOption,
+.Select__option {
+    background-color: transparent !important;
+    color: var(--text-main) !important;
+    cursor: pointer !important;
+}
+
+.VirtualizedSelectFocusedOption,
+.Select__option--is-focused,
+.Select__option:hover {
+    background-color: var(--primary-color) !important;
+    color: white !important;
+}
+
