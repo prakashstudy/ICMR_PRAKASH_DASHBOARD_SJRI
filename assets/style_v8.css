@@ -9,55 +9,7 @@
     --warning-color: #f59e0b;
     --danger-color: #f43f5e;
 
-    /* Dark Theme Defaults */
-    --bg-dark: #0f172a;
-    --card-bg: rgba(30, 41, 59, 0.7);
-    --sidebar-bg: rgba(30, 41, 59, 0.8);
-    --glass-bg: rgba(255, 255, 255, 0.03);
-    --glass-border: rgba(255, 255, 255, 0.1);
-    --text-main: #f8fafc;
-    --text-muted: #94a3b8;
-    --border-color: rgba(255, 255, 255, 0.05);
-    --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-    --body-bg: radial-gradient(circle at top right, #1e1b4b 0%, #0f172a 100%);
-
-    /* Hover States (Dark Default) */
-    --card-hover-bg: rgba(30, 41, 59, 0.85);
-    --card-hover-shadow: 0 20px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(99, 102, 241, 0.2);
-    --card-hover-border: rgba(99, 102, 241, 0.4);
-    --btn-hover-bg: rgba(255, 255, 255, 0.1);
-    --select-bg: rgba(15, 23, 42, 0.6);
-    --select-focused-bg: #1e293b;
-    --scrollbar-thumb: rgba(255, 255, 255, 0.1);
-    --icon-bg: rgba(255, 255, 255, 0.03);
-
-    --font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-    --sidebar-width: 280px;
-    --top-bar-height: 110px;
-    --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-
-    /* Table & Card Variables */
-    --table-header-bg: #0f172a;
-    --table-header-text: #6366f1;
-    --table-header-border: #6366f1;
-    --table-cell-bg: #1e293b;
-    --table-cell-text: #f8fafc;
-    --table-border: rgba(255, 255, 255, 0.05);
-
-    --cat-normal-bg: rgba(16, 185, 129, 0.1);
-    --cat-normal-text: #10b981;
-    --cat-mild-bg: rgba(245, 158, 11, 0.1);
-    --cat-mild-text: #f59e0b;
-    --cat-moderate-bg: rgba(249, 115, 22, 0.1);
-    --cat-moderate-text: #f97316;
-    --cat-severe-bg: rgba(244, 63, 94, 0.1);
-    --cat-severe-text: #f43f5e;
-    --cat-incomplete-bg: #1e293b;
-    --cat-incomplete-text: #94a3b8;
-}
-
-/* Light Theme Overrides */
-.light-theme {
+    /* Light Theme Defaults (Enforced) */
     --bg-dark: #f8fafc;
     --card-bg: rgba(255, 255, 255, 0.8);
     --sidebar-bg: rgba(255, 255, 255, 0.9);
@@ -66,7 +18,6 @@
     --text-main: #0f172a;
     --text-muted: #64748b;
     --border-color: rgba(0, 0, 0, 0.05);
-    --shadow-sm: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     --shadow-md: 0 10px 15px -3px rgba(99, 102, 241, 0.1);
     --body-bg: #f1f5f9;
 
@@ -80,7 +31,12 @@
     --scrollbar-thumb: rgba(0, 0, 0, 0.1);
     --icon-bg: rgba(99, 102, 241, 0.05);
 
-    /* Table & Card Variables Light */
+    --font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    --sidebar-width: 280px;
+    --top-bar-height: 110px;
+    --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Table & Card Variables (Light) */
     --table-header-bg: #f8fafc;
     --table-header-text: #4f46e5;
     --table-header-border: #4f46e5;
@@ -99,6 +55,9 @@
     --cat-incomplete-bg: #ffffff;
     --cat-incomplete-text: #64748b;
 }
+
+/* Light Theme Overrides (Redundant now, keeping commented out or removing) */
+/* .light-theme { ... } removed as it is now the default */
 
 body {
     margin: 0;
@@ -1343,4 +1302,9 @@ body:not(.light-theme) .dash-spreadsheet-container .dash-spreadsheet .dash-cell:
 .Select__option:hover {
     background-color: var(--primary-color) !important;
     color: white !important;
+}
+
+/* Force Moon icon in Light Theme even if class is fa-sun */
+.light-theme .fa-sun::before {
+    content: "\f186" !important;
 }
