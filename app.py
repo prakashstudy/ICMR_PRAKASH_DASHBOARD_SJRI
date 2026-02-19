@@ -626,22 +626,25 @@ def load_data():
             
         # Cross-calculate Age from DOB if missing
         if "DOB" in df.columns:
-            # Use enrollment_date as reference, fallback to today
-            ref_date = df["enrollment_date"].fillna(pd.Timestamp.now())
+            # Use enrollment_date as reference, fallback to today (normalized to UTC to prevent mixing types)
+            now_utc = pd.Timestamp.now(tz='UTC')
+            # Ensure enrollment_date is UTC
+            ref_date = pd.to_datetime(df["enrollment_date"], errors='coerce', utc=True).fillna(now_utc)
             
             # Mask for missing Ages where DOB exists
             mask = df["Age"].isna() & df["DOB"].notna()
             
             if mask.any():
-                # Ensure compatibility by removing timezones (tz-naive)
                 try:
-                    # Fix: Ensure ref_date is also timezone-naive to match localized(None) DOB
-                    ref_dt_naive = pd.to_datetime(ref_date[mask]).dt.tz_localize(None)
-                    dob_dt_naive = pd.to_datetime(df.loc[mask, "DOB"]).dt.tz_localize(None)
-                    diff = (ref_dt_naive - dob_dt_naive).dt.days
+                    # Fix: Ensure DOB is also UTC
+                    dob_dt = pd.to_datetime(df.loc[mask, "DOB"], errors='coerce', utc=True)
+                    
+                    # Calculate difference (UTC - UTC is valid)
+                    diff = (ref_date[mask] - dob_dt).dt.days
+                    
                     calculated_ages = (diff / 365.25).round(2)
                     # Only apply if result is sane
-                    df.loc[mask, "Age"] = calculated_ages.apply(lambda x: x if 0 <= x < 150 else None)
+                    df.loc[mask, "Age"] = calculated_ages.apply(lambda x: x if x is not None and 0 <= x < 150 else None)
                 except Exception as age_err:
                     print(f"DEBUG: Age calculation fallback failed: {age_err}")
 
@@ -1693,7 +1696,7 @@ app.layout = html.Div([
     dcc.Store(id="stored-data"),
     dcc.Download(id="download-data"),
 
-    # dcc.Store(id="theme-store", data="dark", storage_type="local"),
+    dcc.Store(id="theme-store", data="light", storage_type="memory"),
     dcc.Store(id="bulk-notification-urls"),
     dcc.Store(id="notification-queue-data", data=[], storage_type="local"),
     dcc.Store(id="reset-notification-trigger", data=0),
@@ -3374,4 +3377,3 @@ app.clientside_callback(
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
