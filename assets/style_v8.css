@@ -1233,6 +1233,7 @@ body:not(.light-theme) .dash-spreadsheet-container .dash-spreadsheet .dash-cell:
     /* Slightly smaller for mobile */
     object-fit: contain;
 }
+
 /* ==========================================================================
    UNIVERSAL DROPDOWN STYLING (Fix for Render/Dash 2.0+)
    ========================================================================== */
@@ -1299,13 +1300,17 @@ body:not(.light-theme) .dash-spreadsheet-container .dash-spreadsheet .dash-cell:
     border-radius: 10px !important;
 }
 
-.sidebar,
 .sidebar-tile,
 .filter-group,
 .dash-dropdown,
 .Select,
 .Select-container {
     overflow: visible !important;
+}
+
+.sidebar {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
 }
 
 .is-focused .Select-control,
@@ -1339,4 +1344,3 @@ body:not(.light-theme) .dash-spreadsheet-container .dash-spreadsheet .dash-cell:
     background-color: var(--primary-color) !important;
     color: white !important;
 }
-
