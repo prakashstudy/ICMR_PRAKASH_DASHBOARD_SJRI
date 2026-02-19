@@ -1190,13 +1190,13 @@ def get_treat_layout():
                         ], vertical=True, pills=True),
                     ], className="filter-group"),
                     
-                    html.Div([
-                         html.P("Theme", className="sidebar-label"),
-                         html.Div([
-                            html.I(className="fas fa-sun"),
-                            html.Span("Toggle Theme", style={"marginLeft": "10px"})
-                         ], id="theme-toggle-mobile", className="theme-toggle-btn-mobile")
-                    ], className="filter-group"),
+                    # html.Div([
+                    #      html.P("Theme", className="sidebar-label"),
+                    #      html.Div([
+                    #         html.I(className=f"fas {'fa-moon' if theme == 'light' else 'fa-sun'}"),
+                    #         html.Span("Toggle Theme", style={"marginLeft": "10px"})
+                    #      ], id="theme-toggle-mobile", className="theme-toggle-btn-mobile")
+                    # ], className="filter-group"),
                 ], className="sidebar-tile mobile-only-extras"),
 
                 html.Div([
@@ -1452,7 +1452,7 @@ def get_shared_placeholders(exclude_list):
         "btn-clear": dbc.Button(id="btn-clear", style={"display": "none"}),
         "btn-excel": dbc.Button(id="btn-excel", style={"display": "none"}),
         "btn-csv": dbc.Button(id="btn-csv", style={"display": "none"}),
-        "theme-toggle-mobile": html.Div(id="theme-toggle-mobile", style={"display": "none"})
+        # "theme-toggle-mobile": html.Div(id="theme-toggle-mobile", style={"display": "none"})
     }
     
     return [v for k, v in all_outputs.items() if k not in exclude_list]
@@ -1481,13 +1481,13 @@ def get_dashboard_layout():
                         ], vertical=True, pills=True),
                     ], className="filter-group"),
                     
-                    html.Div([
-                         html.P("Theme", className="sidebar-label"),
-                         html.Div([
-                            html.I(className="fas fa-sun"),
-                            html.Span("Toggle Theme", style={"marginLeft": "10px"})
-                         ], id="theme-toggle-mobile", className="theme-toggle-btn-mobile")
-                    ], className="filter-group"),
+                    # html.Div([
+                    #      html.P("Theme", className="sidebar-label"),
+                    #      html.Div([
+                    #         html.I(className=f"fas {'fa-moon' if theme == 'light' else 'fa-sun'}"),
+                    #         html.Span("Toggle Theme", style={"marginLeft": "10px"})
+                    #      ], id="theme-toggle-mobile", className="theme-toggle-btn-mobile")
+                    # ], className="filter-group"),
                 ], className="sidebar-tile mobile-only-extras"),
 
                 # Location Selection (Always Visible)
@@ -1681,7 +1681,7 @@ def get_dashboard_layout():
                 "block-code-dropdown", "location-dropdown", "benificiery-dropdown", "anemia-dropdown", "btn-clear", "btn-excel", "btn-csv",
                 "severe-count", "avg-hgb", "diet-count", "map", "benificiery-bar", "anemia-pie", 
                 "anemia-village-bar", "block-anemia-bar", "block-prevalence-bar", "hgb-stats-bar", "bmi-bar", "table",
-                "theme-toggle-mobile", "prevalence-val", "normal-count", "mild-count", "moderate-count", "total"
+                "prevalence-val", "normal-count", "mild-count", "moderate-count", "total"
             ])
         ], id="main-content", className="main-content")
     ])
@@ -1693,7 +1693,7 @@ app.layout = html.Div([
     dcc.Store(id="stored-data"),
     dcc.Download(id="download-data"),
 
-    dcc.Store(id="theme-store", data="dark", storage_type="local"),
+    # dcc.Store(id="theme-store", data="dark", storage_type="local"),
     dcc.Store(id="bulk-notification-urls"),
     dcc.Store(id="notification-queue-data", data=[], storage_type="local"),
     dcc.Store(id="reset-notification-trigger", data=0),
@@ -1727,9 +1727,9 @@ app.layout = html.Div([
         
         # Right Group: Tools & Partners
         html.Div([
-            html.Div([
-                html.I(className="fas fa-sun"),
-            ], id="theme-toggle", className="theme-toggle-btn", style={"marginRight": "15px"}),
+            # html.Div([
+            #     html.I(className="fas fa-sun"),
+            # ], id="theme-toggle", className="theme-toggle-btn", style={"marginRight": "15px"}),
             
             html.Div([
                 html.Img(src="/assets/images.png", className="logo-img partner-logo images-logo"),
@@ -1763,9 +1763,12 @@ app.layout = html.Div([
     Input("url", "pathname")
 )
 def display_page(pathname):
+    print(f"DEBUG: display_page called. Path: {pathname}")
+    # theme = theme_data or "dark" # Default to dark if None
     if pathname == "/track":
         return get_track_layout()
     elif pathname == "/treat":
+        print(f"DEBUG: Calling get_treat_layout")
         return get_treat_layout()
     else:
         # Default to the Main Dashboard (Now under 'Test' branding in Nav)
@@ -3336,22 +3339,23 @@ def manage_queue(n_clear, n_removes, current_queue):
         
     return no_update
 
-# Theme Toggle Logic
-app.clientside_callback(
-    ClientsideFunction(namespace="clientside", function_name="toggle_theme"),
-    Output("theme-store", "data"),
-    Input("theme-toggle", "n_clicks"),
-    Input("theme-toggle-mobile", "n_clicks"),
-    State("theme-store", "data"),
-    prevent_initial_call=True
-)
+# # Theme Toggle Logic
+# app.clientside_callback(
+#     ClientsideFunction(namespace="clientside", function_name="toggle_theme"),
+#     Output("theme-store", "data"),
+#     Input("theme-toggle", "n_clicks"),
+#     Input("theme-toggle-mobile", "n_clicks"),
+#     State("theme-store", "data"),
+#     prevent_initial_call=True
+# )
 
-# Clientside initialization to apply persistent theme from dcc.Store
-app.clientside_callback(
-    ClientsideFunction(namespace="clientside", function_name="init_theme"),
-    Output("theme-toggle", "children"),
-    Input("theme-store", "data")
-)
+# # Clientside initialization to apply persistent theme from dcc.Store
+# app.clientside_callback(
+#     ClientsideFunction(namespace="clientside", function_name="init_theme"),
+#     Output("theme-toggle", "children"),
+#     Input("theme-store", "data"),
+#     Input("url", "pathname")
+# )
 
 # Clientside callback - Modified to NOT trigger on data change anymore
 app.clientside_callback(
