@@ -564,7 +564,7 @@ def load_data():
             # height in meters, ensure not zero
             valid_mask = (df["Weight"] > 0) & (h_vals > 0)
             df["BMI"] = None
-            df.loc[valid_mask, "BMI"] = (df.loc[valid_mask, "Weight"] / ((h_vals.loc[valid_mask] / 100.0) ** 2)).round(1)
+            df.loc[valid_mask, "BMI"] = (df.loc[valid_mask, "Weight"] / ((h_vals.loc[valid_mask] / 100.0) ** 2)).round(2)
         else:
             df["BMI"] = None
 
@@ -2046,13 +2046,14 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         diet_yes = (df["Diet 2"].astype(str).str.strip().str.lower() == "yes").sum()
     else:
         diet_yes = 0
-    avg_hgb = round(df["HGB"].mean(), 2) if not df.empty else 0
+    avg_hgb_val = round(df["HGB"].mean(), 2) if not df.empty else 0
+    avg_hgb = f"{avg_hgb_val:.2f}" if avg_hgb_val > 0 else "0.00"
     
     # Prevalence should be based on the FILTERED total (len(df)), not the District Total (total)
     filtered_total = len(df)
     anemic_count = mild + moderate + severe
-    prevalence = round((anemic_count / filtered_total * 100), 1) if filtered_total > 0 else 0
-    prevalence_str = f"{prevalence}%" if filtered_total > 0 else "No Data"
+    prevalence = round((anemic_count / filtered_total * 100), 2) if filtered_total > 0 else 0
+    prevalence_str = f"{prevalence:.2f}%" if filtered_total > 0 else "No Data"
 
     # Balanced Percentage Logic for Anemia Categories (Ensure 100.0% sum)
     def get_balanced_percentages(counts_dict, total_count, target_sum=100.0):
@@ -2060,15 +2061,15 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             return {k: 0.0 for k in counts_dict}
         
         # Initial rounding
-        pcts = {k: round((v / total_count * 100), 1) for k, v in counts_dict.items()}
-        current_sum = round(sum(pcts.values()), 1)
+        pcts = {k: round((v / total_count * 100), 2) for k, v in counts_dict.items()}
+        current_sum = round(sum(pcts.values()), 2)
         
         # Adjust if sum is not exactly target_sum (due to rounding)
-        if current_sum != round(target_sum, 1) and current_sum != 0:
-            diff = round(target_sum - current_sum, 1)
+        if current_sum != round(target_sum, 2) and current_sum != 0:
+            diff = round(target_sum - current_sum, 2)
             # Adjust the category with the highest count to minimize visual impact
             max_cat = max(counts_dict, key=lambda k: (counts_dict[k], k))
-            pcts[max_cat] = round(pcts[max_cat] + diff, 1)
+            pcts[max_cat] = round(pcts[max_cat] + diff, 2)
             
         return pcts
 
@@ -2092,7 +2093,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
 
     def kpi_text(count, pct, t_count):
         if t_count == 0: return "No Data"
-        return f"{count} ({pct}%)"
+        return f"{count} ({pct:.2f}%)"
 
     normal_kpi = kpi_text(normal, balanced_pcts["normal"], filtered_total)
     mild_kpi = kpi_text(mild, balanced_pcts["mild"], filtered_total)
@@ -2273,10 +2274,10 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     # Get pre-calculated balanced percentages for display text
     # This ensures the pie chart shows the EXACT same % as the cards
     pie_texts = [
-        f"{balanced_pcts['normal']}%",
-        f"{balanced_pcts['mild']}%",
-        f"{balanced_pcts['moderate']}%",
-        f"{balanced_pcts['severe']}%"
+        f"{balanced_pcts['normal']:.2f}%",
+        f"{balanced_pcts['mild']:.2f}%",
+        f"{balanced_pcts['moderate']:.2f}%",
+        f"{balanced_pcts['severe']:.2f}%"
     ]
     
     # Filter out zero values to avoid messy empty slices
@@ -2418,7 +2419,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             ),
             opacity=0.9,
             name="Mean HGB",
-            text=stats["mean"],
+            text=stats["mean"].map(lambda x: f"{x:.2f}"),
             textposition="auto",
             textfont=dict(color="white", size=10, family="-apple-system, BlinkMacSystemFont, sans-serif"),
             customdata=stats[["PSU Name", "area_code", "std", "count", "anemic_count"]].values.tolist(),
@@ -2799,7 +2800,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
 
         # Calculate Percentage
         # Handle division by zero
-        block_prevalence = (block_anemic / block_totals * 100).fillna(0).round(1)
+        block_prevalence = (block_anemic / block_totals * 100).fillna(0).round(2)
 
         # Create Custom Data for Tooltip
         prev_summaries = []
@@ -2809,7 +2810,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             prev = block_prevalence.loc[block]
             
             summary = f"<span style='font-size:16px;'><b>{block}</b></span><br>"
-            summary += f"Prevalence: <b>{prev}%</b><br>"
+            summary += f"Prevalence: <b>{prev:.2f}%</b><br>"
             summary += f"Anemic Cases: <b>{int(anemic)}</b><br>"
             summary += f"Total Assessed: <b>{int(b_total)}</b>"
             prev_summaries.append(summary)
@@ -2818,7 +2819,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         block_prev_fig.add_trace(go.Bar(
             x=block_prevalence.index,
             y=block_prevalence.values,
-            text=[f"{v}%" for v in block_prevalence.values],
+            text=[f"{v:.2f}%" for v in block_prevalence.values],
             textposition='auto',
             name="Prevalence",
             marker_color="#8b5cf6", # Violet for prevalence
