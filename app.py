@@ -14,8 +14,14 @@ import hashlib
 
 
 import flask
+from flask import request, jsonify
+import requests
 import os
 from who_standards import calculate_bmi_z_score, classify_who_z_score
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # =========================
 # GLOBAL CONSTANTS
@@ -89,14 +95,133 @@ def serve_assets(filename):
         return flask.send_from_directory(root_dir, filename)
     return flask.abort(404)
 
+# ================================
+# WHATSAPP CLOUD API CONFIGURATION
+# ================================
+WA_TOKEN = os.getenv("WA_TOKEN", "YOUR_ACCESS_TOKEN_FROM_META")
+WA_PHONE_NUMBER_ID = os.getenv("WA_PHONE_NUMBER_ID", "YOUR_PHONE_NUMBER_ID")
+WA_VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN", "my_secure_dashboard_token")
+
+@server.route('/webhook', methods=['GET', 'POST'])
+def whatsapp_webhook():
+    if request.method == 'GET':
+        # 1. VERIFICATION (Meta will hit this to verify you own the URL)
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        
+        if mode and token:
+            if mode == "subscribe" and token == WA_VERIFY_TOKEN:
+                return challenge, 200
+            else:
+                return "Verification failed", 403
+                
+    elif request.method == 'POST':
+        # 2. MESSAGES RECEIVED (When a user replies on WhatsApp)
+        body = request.get_json()
+        
+        if body.get("object"):
+            try:
+                entry = body.get("entry", [])[0]
+                changes = entry.get("changes", [])[0]
+                value = changes.get("value", {})
+                
+                # Check if it is a user message (and not just a delivery receipt)
+                if "messages" in value:
+                    message_info = value["messages"][0]
+                    sender_phone = str(message_info.get("from")) # E.g., '919876543210'
+                    msg_body = str(message_info.get("text", {}).get("body", "")).strip()
+                    
+                    print(f"\n>> 💬 WHATSAPP MESSAGE RECEIVED FROM {sender_phone}: {msg_body}\n")
+                    
+                    # --- TREATMENT RECORDING LOGIC (REC Protocol) ---
+                    # Protocol: REC [ID] [Tablets] [Syrup] [Counseling (Y/N)]
+                    if msg_body.upper().startswith("REC "):
+                        try:
+                            parts = msg_body.split()
+                            if len(parts) >= 3:
+                                b_id = parts[1]
+                                tablets = parts[2] if len(parts) > 2 else "0"
+                                syrup = parts[3] if len(parts) > 3 else "0"
+                                counseling = "Yes" if (len(parts) > 4 and parts[4].upper() == "Y") else "No"
+                                
+                                # Lookup Beneficiary Name for Confirmation
+                                df_full, _, _ = load_data()
+                                b_name = "Unknown Beneficiary"
+                                if not df_full.empty and "ID" in df_full.columns:
+                                    match = df_full[df_full["ID"].astype(str) == str(b_id)]
+                                    if not match.empty:
+                                        b_name = match.iloc[0]["Name"]
+                                
+                                # Sync to Google Sheets
+                                feedback_data = {
+                                    "ID": b_id,
+                                    "Status": "WhatsApp Feedback: Active Record",
+                                    "Remarks": f"WhatsApp Recording via {sender_phone}",
+                                    "IFA_Tablets": tablets,
+                                    "IFA_Syrup_ml": syrup,
+                                    "Counseling_Provided": counseling,
+                                    "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                }
+                                f_df = pd.DataFrame([feedback_data])
+                                threading.Thread(target=sync_data_to_sheets, args=(f_df,), daemon=True).start()
+                                
+                                reply_text = (f"✅ RECORDED: {b_name} (ID: {b_id})\n"
+                                             f"💊 Tablets: {tablets}\n"
+                                             f"🥤 Syrup: {syrup}ml\n"
+                                             f"🗣️ Counseling: {counseling}\n\n"
+                                             "Thank you for the update!")
+                                send_whatsapp_message(sender_phone, reply_text)
+                                return jsonify({"status": "ok"}), 200
+                        except Exception as parse_err:
+                            print(f"ERROR parsing WhatsApp REC: {parse_err}")
+                            send_whatsapp_message(sender_phone, "⚠️ Error parsing your record. Please use format: REC [ID] [Tablets] [Syrup] [Y/N]")
+
+                    # 3. DEFAULT AUTO REPLY
+                    reply_text = f"Thank you! Your response: '{msg_body}' has been securely recorded. Use 'REC [ID] [Tabs] [Syrup] [Y/N]' for treatment updates."
+                    send_whatsapp_message(sender_phone, reply_text)
+                    
+            except IndexError:
+                pass # Ignore status updates like "read" or "delivered"
+                
+            return jsonify({"status": "ok"}), 200
+            
+        return jsonify({"status": "error"}), 404
+
+def send_whatsapp_message(to_number, text_message):
+    """Utility function to reply back using Meta Cloud API"""
+    url = f"https://graph.facebook.com/v19.0/{WA_PHONE_NUMBER_ID}/messages"
+    
+    headers = {
+        "Authorization": f"Bearer {WA_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {"body": text_message}
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        print(f">> 📤 SENT Auto-Reply to {to_number}: Status {response.status_code}")
+        return response.json()
+    except Exception as e:
+        print(f">> ❌ Failed to send WhatsApp message: {e}")
+        return {}
+
 # Styles are now loaded from assets/style_v3.css automatically
 
 # =========================
 # LOAD DATA (URL or CSV)
 # =========================
-DATA_SOURCE_URL = "https://script.google.com/macros/s/AKfycbzazlpEvo3qo2pVhp0fvcpUrlcyR9QRE2SYED5fu-5Og5oVBHZ-EIbaOR-VNCwEIC6JdQ/exec" 
+DATA_SOURCE_URL = os.getenv("DATA_SOURCE_URL", "https://script.google.com/macros/s/AKfycbzazlpEvo3qo2pVhp0fvcpUrlcyR9QRE2SYED5fu-5Og5oVBHZ-EIbaOR-VNCwEIC6JdQ/exec")
 # Paste your deployed Google Apps Script Web App URL here to enable write-back
-EXCEL_WRITE_URL = "https://script.google.com/macros/s/AKfycbyfwRVnmXLB8qQt31kIGBmC1NxZ_atYNnM4h-M0sREFpIJJ5au8X9uu8Olwch80XRNpqQ/exec" 
+# Base URL for feedback links (Update this when deploying to Render/Vercel)
+DASHBOARD_BASE_URL = os.getenv("DASHBOARD_BASE_URL", "http://127.0.0.1:10000")
+EXCEL_WRITE_URL = os.getenv("EXCEL_WRITE_URL", "https://script.google.com/macros/s/AKfycbyfwRVnmXLB8qQt31kIGBmC1NxZ_atYNnM4h-M0sREFpIJJ5au8X9uu8Olwch80XRNpqQ/exec")
 LAST_SYNC_CACHE = {} 
 CACHE_FILE = "sync_cache.json"
 
@@ -124,7 +249,7 @@ def save_sync_cache():
 load_sync_cache()
 
 # Notification tracking
-NOTIFIED_CACHE = {}
+NOTIFIED_CACHE: dict = {}
 NOTIFIED_FILE = "notified_ashas.json"
 
 def load_notified_cache():
@@ -367,6 +492,51 @@ def classify_anemia_who(hgb, age, gender, beneficiary):
     # If we can't determine (missing/unclear beneficiary AND missing age), return incomplete
     return "incomplete"
 
+def get_anemia_guideline(beneficiary, category):
+    """
+    Returns clinical workplan/recommendation based on beneficiary type and anemia category.
+    Derived from IR Proposal version 1.2 (June 2025).
+    """
+    b = str(beneficiary).lower()
+    c = str(category).lower()
+    
+    if c == "normal":
+        return "Prophylaxis: Biweekly 1ml IFA syrup (Children) or 1 Weekly IFA Tablet (Adults). Continue monitoring."
+        
+    if "6-23 months" in b or "24-59 months" in b or "5-59 months" in b:
+        if c == "mild":
+            return "IFA Syrup (1ml once daily) for 3 months. Counseling for compliance. Recheck Hb after 3 months."
+        elif c == "moderate":
+            return "IFA Syrup (1ml once daily) for 3 months. Check CBC, Ferritin, CRP. Refer if non-responsive after 1 month."
+        elif c == "severe":
+            return "IMMEDIATE REFERRAL: Start therapeutic IFA syrup and refer to specialist for evaluation."
+            
+    elif "adolescent" in b or "10-19" in b:
+        if c == "mild":
+            return "Two IFA tablets (60mg Fe) weekly for 3 months. Counseling & Wash practices."
+        elif c == "moderate":
+            return "Two IFA tablets weekly for 3 months. Check CBC/Ferritin/CRP. Refer if no improvement after 1 month."
+        elif c == "severe":
+            return "IMMEDIATE REFERRAL: Refer to specialist for therapeutic iron / investigation."
+
+    elif "pregnant" in b:
+        if c == "mild":
+            return "Daily IFA (120mg) on empty stomach. Counseling & Deworming (if >13 weeks). Repeat Hb in 4-6 weeks."
+        elif c == "moderate":
+            return "Daily IFA (120mg). Check CBC, Ferritin, CRP. Consider IV Iron if <28 weeks or non-responsive."
+        elif c == "severe":
+            return "CRITICAL: Urgent referral. Consider hospitalization if Hb <5.0 or 3rd trimester. Refer for IV Iron/Transfusion."
+
+    elif "non-pregnant women" in b or "20-49" in b or "reproductive age" in b:
+        if c == "mild":
+            return "Two IFA tablets (60mg Fe) weekly for 3 months. Repeat Hb after 3 months."
+        elif c == "moderate":
+            return "Two IFA tablets weekly for 3 months. Check CBC/Ferritin/CRP. Follow-up after 1 month."
+        elif c == "severe":
+            return "IMMEDIATE REFERRAL: Evaluation & treatment by specialist. Investigate for IDA."
+
+    return "Follow standard SAM/Anemia protocol. Recheck Hb and ensure compliance."
+
 def sync_data_to_sheets(df):
     """
     Sends computed data (Anemia Status, Corrected Age) back to Google Sheets.
@@ -384,7 +554,7 @@ def sync_data_to_sheets(df):
         "Name", "Gender", "Benificiery", "HGB", "anemia_category",
         "Length", "Height", "Weight", "Age", "whatsapp",
         "Diet 1", "Diet 2", "field_investigator", "Asha_Worker", "data_operator",
-        "Sample Collected Date", "bmi_category", "BMI", "Email", "Status"
+        "Sample Collected Date", "bmi_category", "BMI", "Email", "Status", "Remarks"
     ]
     
     # Identify which columns actually exist in the current dataframe
@@ -564,7 +734,7 @@ def load_data():
             # height in meters, ensure not zero
             valid_mask = (df["Weight"] > 0) & (h_vals > 0)
             df["BMI"] = None
-            df.loc[valid_mask, "BMI"] = (df.loc[valid_mask, "Weight"] / ((h_vals.loc[valid_mask] / 100.0) ** 2)).round(1)
+            df.loc[valid_mask, "BMI"] = (df.loc[valid_mask, "Weight"] / ((h_vals.loc[valid_mask] / 100.0) ** 2)).round(2)
         else:
             df["BMI"] = None
 
@@ -644,7 +814,7 @@ def load_data():
                     
                     calculated_ages = (diff / 365.25).round(2)
                     # Only apply if result is sane
-                    df.loc[mask, "Age"] = calculated_ages.apply(lambda x: x if x is not None and 0 <= x < 150 else None)
+                    df.loc[mask, "Age"] = calculated_ages.apply(lambda x: x if (isinstance(x, (int, float)) and not pd.isna(x) and 0 <= x < 150) else None)
                 except Exception as age_err:
                     print(f"DEBUG: Age calculation fallback failed: {age_err}")
 
@@ -777,7 +947,12 @@ def generate_weekly_summary(df):
         
         for i, (_, row) in enumerate(asha_group.iterrows(), 1):
             cat = str(row["anemia_category"]).capitalize()
-            lines.append(f"{i}. {row['Name']} ({row['ID']}) - {cat} (Hb: {row['HGB']})")
+            p_id = str(row["ID"])
+            # Format ID for URL (Replaces / with -- for clean URL)
+            url_id = p_id.replace("/", "--")
+            feedback_url = f"{DASHBOARD_BASE_URL}/asha-feedback/{url_id}"
+            lines.append(f"{i}. {row['Name']} ({p_id}) - {cat} (Hb: {row['HGB']})")
+            lines.append(f"   Feedback: {feedback_url}")
         
         summary_text = "\n".join(lines)
         summaries.append({
@@ -843,7 +1018,7 @@ def area_coordinates():
 
 # Theme Configurations
 THEME_CONFIG = {
-    "dark": {
+    "dark-theme": {
         "plotly": "plotly_dark",
         "mapbox": "carto-darkmatter",
         "grid": "rgba(255,255,255,0.05)",
@@ -856,7 +1031,7 @@ THEME_CONFIG = {
         "table_header_text": "#818cf8",
         "table_cell_bg": "#1e293b"
     },
-    "light": {
+    "light-theme": {
         "plotly": "plotly_white",
         "mapbox": "carto-positron",
         "grid": "rgba(0,0,0,0.05)",
@@ -871,8 +1046,10 @@ THEME_CONFIG = {
     }
 }
 
-def create_map(df, theme="dark"):
-    t = THEME_CONFIG.get(theme, THEME_CONFIG["dark"])
+def create_map(df, theme="dark-theme"):
+    # Normalize theme
+    theme = "light-theme" if theme == "light" else ("dark-theme" if theme == "dark" else (theme or "dark-theme"))
+    t = THEME_CONFIG.get(theme, THEME_CONFIG["dark-theme"])
     fig = go.Figure()
     
     # Defaults
@@ -973,7 +1150,7 @@ def create_map(df, theme="dark"):
     try:
         with open("koppal_district_official.geojson", "r") as f:
             geojson_data = json.load(f)
-        fig.add_trace(go.Choroplethmap(
+        fig.add_trace(go.Choroplethmapbox(
             geojson=geojson_data, locations=["Koppal"], featureidkey="properties.district",
             z=[1], colorscale=[[0, "rgba(52, 152, 219, 0.1)"], [1, "rgba(52, 152, 219, 0.1)"]],
             marker_line_width=2, marker_line_color="#2980b9", marker_opacity=0.5,
@@ -988,7 +1165,7 @@ def create_map(df, theme="dark"):
         # Weight Severe cases (3) higher than Moderate (1) for heat intensity
         heat_df["weight"] = heat_df["anemia_category"].str.lower().map({"severe": 3, "moderate": 1})
         
-        fig.add_trace(go.Densitymap(
+        fig.add_trace(go.Densitymapbox(
             lat=heat_df["lat"], lon=heat_df["lon"],
             z=heat_df["weight"], 
             radius=20,
@@ -1009,7 +1186,7 @@ def create_map(df, theme="dark"):
     for cat in categories:
         d_cat = status_df[cat["filter"]]
         if not d_cat.empty:
-            fig.add_trace(go.Scattermap(
+            fig.add_trace(go.Scattermapbox(
                 lat=d_cat["lat"], lon=d_cat["lon"], mode="markers+text",
                 marker=dict(size=14, color=cat["color"], opacity=0.9),
                 name=cat["name"],
@@ -1021,7 +1198,7 @@ def create_map(df, theme="dark"):
             ))
     
     fig.update_layout(
-        map=dict(
+        mapbox=dict(
             style=t["mapbox"],
             center=dict(lat=center_lat, lon=center_lon),
             zoom=zoom
@@ -1035,8 +1212,10 @@ def create_map(df, theme="dark"):
     )
     return fig
 
-def create_treat_map(df, theme="dark"):
-    t = THEME_CONFIG.get(theme, THEME_CONFIG["dark"])
+def create_treat_map(df, theme="dark-theme"):
+    # Normalize theme
+    theme = "light-theme" if theme == "light" else ("dark-theme" if theme == "dark" else (theme or "dark-theme"))
+    t = THEME_CONFIG.get(theme, THEME_CONFIG["dark-theme"])
     fig = go.Figure()
     
     default_lat = 15.6
@@ -1106,7 +1285,8 @@ def create_treat_map(df, theme="dark"):
         total_anemic = mild + moderate + severe
         
         if total_anemic > 0:
-            color = "#ef4444" if severe > 0 else ("#f97316" if moderate > 0 else "#f59e0b")
+            # Color priority: Severe (Red) > Moderate (Yellow) > Mild (Orange)
+            color = "#ef4444" if severe > 0 else ("#eab308" if moderate > 0 else "#f97316")
             status = f"<b>{total_anemic}</b> Anemic"
         else:
             color = "#10b981"
@@ -1135,7 +1315,7 @@ def create_treat_map(df, theme="dark"):
 
     if treat_data:
         t_df = pd.DataFrame(treat_data)
-        fig.add_trace(go.Scattermap(
+        fig.add_trace(go.Scattermapbox(
             lat=t_df["lat"], lon=t_df["lon"], mode="markers",
             marker=dict(size=t_df["size"], color=t_df["color"], opacity=0.8),
             name="Urgent PSUs",
@@ -1148,7 +1328,7 @@ def create_treat_map(df, theme="dark"):
     try:
         with open("koppal_district_official.geojson", "r") as f:
             geojson_data = json.load(f)
-        fig.add_trace(go.Choroplethmap(
+        fig.add_trace(go.Choroplethmapbox(
             geojson=geojson_data, locations=["Koppal"], featureidkey="properties.district",
             z=[1], colorscale=[[0, "rgba(52, 152, 219, 0.1)"], [1, "rgba(52, 152, 219, 0.1)"]],
             marker_line_width=2, marker_line_color="#2980b9", marker_opacity=0.5,
@@ -1157,7 +1337,7 @@ def create_treat_map(df, theme="dark"):
     except: pass
 
     fig.update_layout(
-        map=dict(
+        mapbox=dict(
             style=t["mapbox"],
             center=dict(lat=center_lat, lon=center_lon),
             zoom=zoom
@@ -1193,13 +1373,6 @@ def get_treat_layout():
                         ], vertical=True, pills=True),
                     ], className="filter-group"),
                     
-                    # html.Div([
-                    #      html.P("Theme", className="sidebar-label"),
-                    #      html.Div([
-                    #         html.I(className=f"fas {'fa-moon' if theme == 'light' else 'fa-sun'}"),
-                    #         html.Span("Toggle Theme", style={"marginLeft": "10px"})
-                    #      ], id="theme-toggle-mobile", className="theme-toggle-btn-mobile")
-                    # ], className="filter-group"),
                 ], className="sidebar-tile mobile-only-extras"),
 
                 html.Div([
@@ -1228,10 +1401,10 @@ def get_treat_layout():
             # Tile 2: Urgent Alerts
             html.Div([
                 html.Div([
-                    html.Label("Urgent Follow-up Subjects", className="sidebar-label", style={"color": "#ef4444"}),
+                    html.Label("Urgent Follow-up Subjects", className="sidebar-label", style={"color": "var(--cat-severe-text)"}),
                     html.Div(id="urgent-alerts-list", className="urgent-list"),
                 ], className="filter-group", id="urgent-section", style={"marginBottom": "0"}),
-            ], className="sidebar-tile", style={"backgroundColor": "rgba(239, 68, 68, 0.05)"}),
+            ], className="sidebar-tile", style={"backgroundColor": "var(--cat-severe-bg)"}),
         ], id="sidebar", className="sidebar"),
 
         # Main Content
@@ -1245,22 +1418,22 @@ def get_treat_layout():
                 ], className="kpi-card"), xs=6, sm=4, md=True),
 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-exclamation-triangle kpi-icon", style={"color": "#ef4444"}), html.P("Severe Anemia", className="kpi-label")], className="kpi-header"),
+                    html.Div([html.I(className="fas fa-exclamation-triangle kpi-icon", style={"color": "var(--cat-severe-text)"}), html.P("Severe Anemia", className="kpi-label")], className="kpi-header"),
                     html.H3(id="severe-count", className="kpi-value")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
                 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-exclamation-circle kpi-icon", style={"color": "#f97316"}), html.P("Moderate Anemia", className="kpi-label")], className="kpi-header"),
+                    html.Div([html.I(className="fas fa-exclamation-circle kpi-icon", style={"color": "var(--cat-moderate-text)"}), html.P("Moderate Anemia", className="kpi-label")], className="kpi-header"),
                     html.H3(id="moderate-count", className="kpi-value")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-circle-exclamation kpi-icon", style={"color": "#f59e0b"}), html.P("Mild Anemia", className="kpi-label")], className="kpi-header"),
+                    html.Div([html.I(className="fas fa-circle-exclamation kpi-icon", style={"color": "var(--cat-mild-text)"}), html.P("Mild Anemia", className="kpi-label")], className="kpi-header"),
                     html.H3(id="mild-count", className="kpi-value")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
                 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-droplet kpi-icon", style={"color": "#991b1b"}), html.P("Avg Hb (g/dL)", className="kpi-label")], className="kpi-header"),
+                    html.Div([html.I(className="fas fa-droplet kpi-icon", style={"color": "var(--cat-severe-text)"}), html.P("Avg Hb (g/dL)", className="kpi-label")], className="kpi-header"),
                     html.H3(id="avg-hgb", className="kpi-value")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
             ], className="mb-4 g-3"),
@@ -1277,7 +1450,7 @@ def get_treat_layout():
             ], className="mb-3 align-items-center"),
 
             html.Div([
-                html.P("Hover over markers to see assigned Asha Workers and beneficiary breakdown.", style={"color": "#64748b", "fontSize": "0.9rem"}),
+                html.P("Hover over markers to see assigned Asha Workers and beneficiary breakdown.", style={"color": "var(--text-muted)", "fontSize": "0.9rem"}),
                 dcc.Graph(id="map", config={"responsive": True}, style=MAP_CARD_STYLE),
             ], className="graph-card", style={"padding": "30px", "marginBottom": "24px"}),
             
@@ -1375,34 +1548,189 @@ def get_treat_layout():
             ])
         ], id="main-content", className="main-content")
 
+# def get_track_layout():
+#     return html.Div([
+#         # Main Content Centered
+#         html.Div([
+#             html.Div([
+#                 html.H1("Asha Follow-up Monitoring", style={"fontWeight": "800", "fontSize": "2.2rem", "marginBottom": "10px", "color": "var(--text-main)"}),
+#                 html.P("Monitor real-time feedback and follow-up status from Asha workers", 
+#                        style={"fontSize": "1rem", "color": "var(--text-muted)", "marginBottom": "30px"}),
+#                 
+#                 html.Div([
+#                     html.Div([
+#                         html.H5([html.I(className="fas fa-comments me-2"), "Recent Feedback Log"], 
+#                                style={"fontWeight": "700", "margin": "0"}),
+#                         dbc.Button([html.I(className="fas fa-sync-alt me-2"), "Refresh Data"], 
+#                                   id="btn-refresh-track", color="primary", size="sm", className="shadow-sm")
+#                     ], className="d-flex justify-content-between align-items-center mb-4"),
+#                     
+#                     dash_table.DataTable(
+#                         id="track-feedback-table",
+#                         style_table={"overflowX": "auto", "borderRadius": "12px", "border": "1px solid var(--glass-border)"},
+#                         style_header={
+#                             "backgroundColor": "var(--table-header-bg)",
+#                             "color": "var(--table-header-text)",
+#                             "fontWeight": "700",
+#                             "padding": "15px",
+#                             "border": "none"
+#                         },
+#                         style_cell={
+#                             "padding": "12px 15px",
+#                             "fontFamily": "var(--font-family)",
+#                             "fontSize": "0.9rem",
+#                             "borderBottom": "1px solid var(--glass-border)",
+#                             "textAlign": "left",
+#                             "whiteSpace": "normal",
+#                             "height": "auto",
+#                         },
+#                         style_data_conditional=[
+#                             {
+#                                 'if': {'column_id': 'Guideline Recommendation'},
+#                                 'backgroundColor': 'rgba(99, 102, 241, 0.05)',
+#                                 'fontWeight': 'bold',
+#                                 'color': 'var(--primary-color)'
+#                             }
+#                         ],
+#                         page_size=15,
+#                         sort_action="native",
+#                         filter_action="native"
+#                     )
+#                 ], className="graph-card", style={"padding": "30px", "width": "100%", "marginBottom": "40px"}),
+# 
+#                 # New Guideline Reference Section
+#                 html.Div([
+#                     html.H4([html.I(className="fas fa-book-medical me-2"), "Clinical Workplan Reference"], 
+#                            style={"fontWeight": "700", "marginBottom": "20px"}),
+#                     dbc.Accordion([
+#                         dbc.AccordionItem([
+#                             html.Ul([
+#                                 html.Li("Mild: 1ml IFA syrup daily for 3 months + Counseling."),
+#                                 html.Li("Moderate: 1ml IFA syrup daily + Investigation (CBC/Ferritin/CRP)."),
+#                                 html.Li("Severe: Urgent referral to specialist + Therapeutic IFA.")
+#                             ])
+#                         ], title="Children (6-59 Months)"),
+#                         dbc.AccordionItem([
+#                             html.Ul([
+#                                 html.Li("Mild/Moderate: 2 IFA tablets weekly for 3 months + Wash practices."),
+#                                 html.Li("Severe: Immediate referral to specialist.")
+#                             ])
+#                         ], title="Adolescent Girls (10-19 Years)"),
+#                         dbc.AccordionItem([
+#                             html.Ul([
+#                                 html.Li("Mild: Daily IFA (120mg) + Deworming + Counseling."),
+#                                 html.Li("Moderate: Investigation + Consider IV Iron if <28 weeks."),
+#                                 html.Li("Severe: Urgent referral/Hospitalization + IV Iron/Transfusion.")
+#                             ])
+#                         ], title="Pregnant Women"),
+#                     ], start_collapsed=True, className="shadow-sm", style={"borderRadius": "12px", "overflow": "hidden"})
+#                 ], style={"width": "100%", "marginBottom": "60px"})
+#             ], style={"minHeight": "400px", "display": "flex", "flexDirection": "column", "alignItems": "center", "justifyContent": "center", "paddingTop": "40px"}),
+#             
+#             get_footer(),
+#             
+#             # Shared placeholders (Exclude Nav and Theme toggle)
+#             *get_shared_placeholders([])
+#         ], id="main-content", className="main-content", 
+#         style={"marginLeft": "0", "width": "100%", "padding": "0 20px"})
+#     ], id="track-layout-container")
+
 def get_track_layout():
     return html.Div([
-        # Main Content Centered
         html.Div([
+            html.I(className="fas fa-tools", style={"fontSize": "4rem", "color": "var(--primary-color)", "marginBottom": "20px"}),
+            html.H1("Coming Soon", style={"fontWeight": "800", "fontSize": "3rem", "color": "var(--text-main)"}),
+            html.P("The Track module is currently being optimized for real-time surveillance.", 
+                   style={"fontSize": "1.2rem", "color": "var(--text-muted)", "maxWidth": "600px", "margin": "0 auto"}),
             html.Div([
-                html.H1("Track Page", style={"fontWeight": "800", "fontSize": "2.5rem", "marginBottom": "15px", "color": "var(--text-main)"}),
-                html.P("Real-time Tracking & Longitudinal Analysis", 
-                       style={"fontSize": "1.1rem", "color": "var(--text-muted)", "marginBottom": "30px"}),
-                
-                html.Div([
-                    html.I(className="fas fa-tools", style={"fontSize": "3rem", "color": "var(--primary-color)", "marginBottom": "20px"}),
-                    html.H5("Feature Under Development", style={"fontWeight": "700", "color": "var(--text-main)"}),
-                    html.P("We are working hard to bring you longitudinal tracking and advanced predictive analytics for anemia management.", 
-                           style={"maxWidth": "400px", "margin": "0 auto 30px auto", "color": "var(--text-muted)"}),
-                    
-                    dbc.Button([html.I(className="fas fa-arrow-left me-2"), "Back to Dashboard"], 
-                               href="/", color="primary", className="px-4 shadow-sm", 
-                               style={"borderRadius": "10px", "fontWeight": "600"})
-                ], className="graph-card", style={"padding": "60px 40px", "textAlign": "center", "maxWidth": "600px", "width": "100%"}),
-            ], style={"minHeight": "70vh", "display": "flex", "flexDirection": "column", "alignItems": "center", "justifyContent": "center"}),
-            
-            get_footer(),
-            
-            # Shared placeholders (Exclude Nav and Theme toggle)
-            *get_shared_placeholders([])
-        ], id="main-content", className="main-content", 
-        style={"marginLeft": "0", "width": "100%", "padding": "0 20px"})
-    ], id="track-layout-container")
+                dbc.Button("Back to Dashboard", href="/", color="primary", className="mt-4 px-5 py-2", style={"borderRadius": "20px", "fontWeight": "600"})
+            ])
+        ], style={"textAlign": "center", "minHeight": "70vh", "display": "flex", "flexDirection": "column", "justifyContent": "center", "alignItems": "center"}),
+        get_footer(),
+        *get_shared_placeholders(["track-feedback-table", "btn-refresh-track"])
+    ], className="main-content", style={"marginLeft": "0", "width": "100%"})
+
+# def get_asha_feedback_layout(p_id):
+#     """
+#     Returns a mobile-optimized layout for Asha workers to provide feedback on a beneficiary.
+#     """
+#     # Attempt to clean the ID if it has slashes/dashes
+#     display_id = str(p_id).replace("---", "/").replace("--", "/")
+#     
+#     return html.Div([
+#         html.Div([
+#             html.Div([
+#                 html.I(className="fas fa-clipboard-check", style={"fontSize": "2rem", "color": "var(--primary-color)", "marginBottom": "15px"}),
+#                 html.H4("Asha Follow-up Feedback", style={"fontWeight": "700", "color": "var(--text-main)"}),
+#                 html.P(f"Beneficiary ID: {display_id}", style={"fontSize": "1.1rem", "fontWeight": "600", "color": "var(--primary-color)"}),
+#                 html.Hr(style={"opacity": "0.1"}),
+#             ], style={"textAlign": "center", "marginBottom": "25px"}),
+#             
+#             html.Div([
+#                 html.Label("What is the current follow-up status?", className="sidebar-label", style={"fontSize": "1rem", "marginBottom": "15px", "display": "block", "textAlign": "center"}),
+#                 
+#                 # Feedback Options
+#                 dcc.RadioItems(
+#                     id="feedback-status",
+#                     options=[
+#                         {"label": html.Div([html.I(className="fas fa-check-circle me-2"), "Followed Up & Advised"], className="feedback-option-label"), "value": "Followed Up"},
+#                         {"label": html.Div([html.I(className="fas fa-clock me-2"), "Visit Scheduled"], className="feedback-option-label"), "value": "Scheduled"},
+#                         {"label": html.Div([html.I(className="fas fa-times-circle me-2"), "Subject Refused / Migrated"], className="feedback-option-label"), "value": "Refused/Migrated"},
+#                         {"label": html.Div([html.I(className="fas fa-comment-dots me-2"), "Other / Remarks"], className="feedback-option-label"), "value": "Other"},
+#                     ],
+#                     value="Followed Up",
+#                     className="feedback-radio-group",
+#                     labelStyle={"display": "block", "marginBottom": "12px"}
+#                 ),
+#                 
+#                 html.Div([
+#                     html.Label("Treatment Record:", className="sidebar-label", style={"fontWeight": "bold", "marginBottom": "10px"}),
+#                     
+#                     html.Div([
+#                         html.Div([
+#                             html.Label("IFA Tablets Given", style={"fontSize": "0.85rem", "color": "var(--text-muted)"}),
+#                             dbc.Input(id="feedback-ifa-tablets", type="number", placeholder="0", min=0, className="mb-2 shadow-sm")
+#                         ], style={"flex": "1", "marginRight": "10px"}),
+#                         
+#                         html.Div([
+#                             html.Label("IFA Syrup Given (ml)", style={"fontSize": "0.85rem", "color": "var(--text-muted)"}),
+#                             dbc.Input(id="feedback-ifa-syrup", type="number", placeholder="0", min=0, className="mb-2 shadow-sm")
+#                         ], style={"flex": "1"})
+#                     ], className="d-flex mb-3"),
+# 
+#                     dbc.Checklist(
+#                         id="feedback-counseling",
+#                         options=[{"label": "Guideline counseling provided", "value": "yes"}],
+#                         value=[],
+#                         switch=True,
+#                         className="mb-3"
+#                     ),
+#                     
+#                     html.Label("Additional Remarks (Optional)", className="sidebar-label"),
+#                     dcc.Textarea(
+#                         id="feedback-remarks",
+#                         placeholder="e.g. Advised for iron-rich diet or referral made...",
+#                         style={"width": "100%", "height": "80px", "borderRadius": "8px", "padding": "10px", "border": "1px solid var(--glass-border)", "backgroundColor": "white"}
+#                     ),
+#                 ], style={"marginTop": "20px"}),
+#                 
+#                 dbc.Button([html.I(className="fas fa-paper-plane me-2"), "Submit Feedback"], 
+#                            id="btn-submit-feedback", color="success", className="w-100 mt-4 py-3 shadow", 
+#                            style={"borderRadius": "12px", "fontWeight": "700", "fontSize": "1.1rem"}),
+#                 
+#                 html.Div(id="feedback-response-msg", style={"marginTop": "20px", "textAlign": "center", "fontWeight": "600"})
+#             ], className="feedback-form-container"),
+#             
+#             # Hidden storage for the ID
+#             dcc.Store(id="feedback-p-id", data=display_id),
+#             
+#         ], className="graph-card", style={"padding": "40px 25px", "maxWidth": "500px", "margin": "20px auto", "borderRadius": "20px"}),
+#         
+#         get_footer(),
+#         
+#         # Share placeholders to avoid errors
+#         *get_shared_placeholders([])
+#     ], className="main-content", style={"padding": "0 15px", "backgroundColor": "#f8fafc", "minHeight": "100vh"})
 
 def get_footer():
     return html.Footer([
@@ -1455,7 +1783,7 @@ def get_shared_placeholders(exclude_list):
         "btn-clear": dbc.Button(id="btn-clear", style={"display": "none"}),
         "btn-excel": dbc.Button(id="btn-excel", style={"display": "none"}),
         "btn-csv": dbc.Button(id="btn-csv", style={"display": "none"}),
-        # "theme-toggle-mobile": html.Div(id="theme-toggle-mobile", style={"display": "none"})
+        "theme-toggle-mobile": html.Div(id="theme-toggle-mobile", style={"display": "none"})
     }
     
     return [v for k, v in all_outputs.items() if k not in exclude_list]
@@ -1484,13 +1812,6 @@ def get_dashboard_layout():
                         ], vertical=True, pills=True),
                     ], className="filter-group"),
                     
-                    # html.Div([
-                    #      html.P("Theme", className="sidebar-label"),
-                    #      html.Div([
-                    #         html.I(className=f"fas {'fa-moon' if theme == 'light' else 'fa-sun'}"),
-                    #         html.Span("Toggle Theme", style={"marginLeft": "10px"})
-                    #      ], id="theme-toggle-mobile", className="theme-toggle-btn-mobile")
-                    # ], className="filter-group"),
                 ], className="sidebar-tile mobile-only-extras"),
 
                 # Location Selection (Always Visible)
@@ -1550,38 +1871,38 @@ def get_dashboard_layout():
                 ], className="kpi-card"), xs=6, sm=4, md=True),
 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-chart-line kpi-icon", style={"color": "#6366f1"}), html.P("Prevalence of Anemia", className="kpi-label")], className="kpi-header"),
+                    html.Div([html.I(className="fas fa-chart-line kpi-icon", style={"color": "var(--primary-color)"}), html.P("Prevalence of Anemia", className="kpi-label")], className="kpi-header"),
                     html.H3(id="prevalence-val", className="kpi-value")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
                 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-check-circle kpi-icon", style={"color": "#10b981"}), html.P("Normal", className="kpi-label")], className="kpi-header"),
+                    html.Div([html.I(className="fas fa-check-circle kpi-icon", style={"color": "var(--success-color)"}), html.P("Normal", className="kpi-label")], className="kpi-header"),
                     html.H3(id="normal-count", className="kpi-value")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
                 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-info-circle kpi-icon", style={"color": "#f59e0b"}), html.P("Mild", className="kpi-label")], className="kpi-header"),
+                    html.Div([html.I(className="fas fa-info-circle kpi-icon", style={"color": "var(--warning-color)"}), html.P("Mild", className="kpi-label")], className="kpi-header"),
                     html.H3(id="mild-count", className="kpi-value")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
                 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-exclamation-circle kpi-icon", style={"color": "#f97316"}), html.P("Moderate", className="kpi-label")], className="kpi-header"),
+                    html.Div([html.I(className="fas fa-exclamation-circle kpi-icon", style={"color": "var(--cat-moderate-text)"}), html.P("Moderate", className="kpi-label")], className="kpi-header"),
                     html.H3(id="moderate-count", className="kpi-value")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
                 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-exclamation-triangle kpi-icon", style={"color": "#ef4444"}), html.P("Severe", className="kpi-label")], className="kpi-header"),
+                    html.Div([html.I(className="fas fa-exclamation-triangle kpi-icon", style={"color": "var(--danger-color)"}), html.P("Severe", className="kpi-label")], className="kpi-header"),
                     html.H3(id="severe-count", className="kpi-value")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
                 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-droplet kpi-icon", style={"color": "#991b1b"}), html.P("Avg Hb (g/dL)", className="kpi-label")], className="kpi-header"),
-                    dcc.Loading(html.H3(id="avg-hgb", className="kpi-value"), type="dot", color="#991b1b")
+                    html.Div([html.I(className="fas fa-droplet kpi-icon", style={"color": "var(--cat-severe-text)"}), html.P("Avg Hb (g/dL)", className="kpi-label")], className="kpi-header"),
+                    dcc.Loading(html.H3(id="avg-hgb", className="kpi-value"), type="dot", color="var(--cat-severe-text)")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
                 
                 dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-utensils kpi-icon", style={"color": "#8b5cf6"}), html.P("Dietary", className="kpi-label")], className="kpi-header"),
-                    dcc.Loading(html.H3(id="diet-count", className="kpi-value"), type="dot", color="#8b5cf6")
+                    html.Div([html.I(className="fas fa-utensils kpi-icon", style={"color": "var(--accent-color)"}), html.P("Dietary", className="kpi-label")], className="kpi-header"),
+                    dcc.Loading(html.H3(id="diet-count", className="kpi-value"), type="dot", color="var(--accent-color)")
                 ], className="kpi-card"), xs=6, sm=4, md=True),
             ], className="mb-4 g-3"),
 
@@ -1696,12 +2017,13 @@ app.layout = html.Div([
     dcc.Store(id="stored-data"),
     dcc.Download(id="download-data"),
 
-    dcc.Store(id="theme-store", data="light", storage_type="memory"),
+    dcc.Store(id="theme-store", data="light-theme", storage_type="local"),
     dcc.Store(id="bulk-notification-urls"),
     dcc.Store(id="notification-queue-data", data=[], storage_type="local"),
-    dcc.Store(id="reset-notification-trigger", data=0),
+    dcc.Store(id="reset-trigger-v2", data=0),
     html.Div(id="bulk-notification-trigger", style={"display": "none"}),
     html.Div(id="mobile-toggle-trigger", style={"display": "none"}),
+    html.Div(id="theme-trigger", style={"display": "none"}),
     
     dbc.Toast(id="bulk-notify-toast", header="Notification", is_open=False,
               dismissable=True, icon="success", duration=5000, 
@@ -1730,9 +2052,7 @@ app.layout = html.Div([
         
         # Right Group: Tools & Partners
         html.Div([
-            # html.Div([
-            #     html.I(className="fas fa-sun"),
-            # ], id="theme-toggle", className="theme-toggle-btn", style={"marginRight": "15px"}),
+            # html.Div(id="theme-toggle", className="theme-toggle-btn", style={"marginRight": "15px", "display": "none"}),
             
             html.Div([
                 html.Img(src="/assets/images.png", className="logo-img partner-logo images-logo"),
@@ -1752,9 +2072,9 @@ app.layout = html.Div([
         html.Div([
             html.Img(src="/assets/main_logo.svg", className="mobile-logo main-mobile-logo"),
             html.Img(src="/assets/images.png", className="mobile-logo partner-mobile-logo"),
-            html.Img(src="/assets/government-of-karnataka.jpg", className="mobile-logo gok-mobile-logo"),
-            html.Img(src="/assets/khpt-logo.png", className="mobile-logo khpt-mobile-logo"),
-        ], className="mobile-logo-container")
+        ], className="mobile-logo-container"),
+        
+        # html.Div(id="theme-toggle-mobile", className="theme-toggle-btn-mobile", style={"marginLeft": "auto", "marginRight": "10px", "display": "none"})
     ], className="mobile-nav"),
 
     # Page Content Container
@@ -1773,6 +2093,9 @@ def display_page(pathname):
     elif pathname == "/treat":
         print(f"DEBUG: Calling get_treat_layout")
         return get_treat_layout()
+#     elif pathname and pathname.startswith("/asha-feedback/"):
+#         p_id = pathname.split("/")[-1]
+#         return get_asha_feedback_layout(p_id)
     else:
         # Default to the Main Dashboard (Now under 'Test' branding in Nav)
         return get_dashboard_layout()
@@ -1850,21 +2173,23 @@ def refresh_data(_):
         Input("anemia-dropdown", "value"), Input("interval", "n_intervals"),
         Input("map", "clickData"), Input("anemia-pie", "clickData"),
         Input("benificiery-bar", "clickData"), Input("btn-clear", "n_clicks"),
-        Input("url", "pathname"), Input("reset-notification-trigger", "data"),
-        Input("theme-store", "data")
+        Input("url", "pathname"), Input("reset-trigger-v2", "data"),
+        # Input("theme-store", "data")
     ]
 )
-def update_dashboard(stored_dict, block_code, location, benificiery, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, reset_trigger, theme):
+def update_dashboard(stored_dict, block_code, location, benificiery, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, reset_trigger, theme_ignored=None):
     try:
-        return internal_update_dashboard(stored_dict, block_code, location, benificiery, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, theme)
+        return internal_update_dashboard(stored_dict, block_code, location, benificiery, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, theme="light-theme")
     except Exception as e:
         import traceback
         print(f"CRITICAL ERROR in update_dashboard: {str(e)}")
         print(traceback.format_exc())
         return [0]*8 + [go.Figure()]*8 + [[]]*18
 
-def internal_update_dashboard(stored_dict, block_code, location, benificiery, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, theme="dark"):
-    t = THEME_CONFIG.get(theme, THEME_CONFIG["dark"])
+def internal_update_dashboard(stored_dict, block_code, location, benificiery, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, theme="light-theme"):
+    # Force light theme
+    theme = "light-theme"
+    t = THEME_CONFIG.get(theme, THEME_CONFIG["light-theme"])
     if not stored_dict or "records" not in stored_dict:
         # Return 30 elements to match the number of outputs
         return [0]*8 + [go.Figure()]*8 + [[]]*18
@@ -2051,8 +2376,8 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     # Prevalence should be based on the FILTERED total (len(df)), not the District Total (total)
     filtered_total = len(df)
     anemic_count = mild + moderate + severe
-    prevalence = round((anemic_count / filtered_total * 100), 1) if filtered_total > 0 else 0
-    prevalence_str = f"{prevalence}%" if filtered_total > 0 else "No Data"
+    prevalence = round((anemic_count / filtered_total * 100), 2) if filtered_total > 0 else 0
+    prevalence_str = f"{prevalence:.2f}%" if filtered_total > 0 else "No Data"
 
     # Balanced Percentage Logic for Anemia Categories (Ensure 100.0% sum)
     def get_balanced_percentages(counts_dict, total_count, target_sum=100.0):
@@ -2060,15 +2385,15 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             return {k: 0.0 for k in counts_dict}
         
         # Initial rounding
-        pcts = {k: round((v / total_count * 100), 1) for k, v in counts_dict.items()}
-        current_sum = round(sum(pcts.values()), 1)
+        pcts = {k: round((v / total_count * 100), 2) for k, v in counts_dict.items()}
+        current_sum = round(sum(pcts.values()), 2)
         
         # Adjust if sum is not exactly target_sum (due to rounding)
-        if current_sum != round(target_sum, 1) and current_sum != 0:
-            diff = round(target_sum - current_sum, 1)
+        if current_sum != round(target_sum, 2) and current_sum != 0:
+            diff = round(target_sum - current_sum, 2)
             # Adjust the category with the highest count to minimize visual impact
             max_cat = max(counts_dict, key=lambda k: (counts_dict[k], k))
-            pcts[max_cat] = round(pcts[max_cat] + diff, 1)
+            pcts[max_cat] = round(pcts[max_cat] + diff, 2)
             
         return pcts
 
@@ -2083,16 +2408,18 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     balanced_anemic_pcts = get_balanced_percentages(anemic_counts_map, filtered_total, target_sum=prevalence)
     
     # Store all in one map for the KPI display function
+    # Cast to float to avoid typing issues with static analysis
+    res_map: dict = balanced_anemic_pcts
     balanced_pcts = {
-        "normal": normal_pct,
-        "mild": balanced_anemic_pcts["mild"],
-        "moderate": balanced_anemic_pcts["moderate"],
-        "severe": balanced_anemic_pcts["severe"]
+        "normal": float(normal_pct),
+        "mild": float(res_map.get("mild", 0.0)),
+        "moderate": float(res_map.get("moderate", 0.0)),
+        "severe": float(res_map.get("severe", 0.0))
     }
 
     def kpi_text(count, pct, t_count):
         if t_count == 0: return "No Data"
-        return f"{count} ({pct}%)"
+        return f"{count} ({pct:.2f}%)"
 
     normal_kpi = kpi_text(normal, balanced_pcts["normal"], filtered_total)
     mild_kpi = kpi_text(mild, balanced_pcts["mild"], filtered_total)
@@ -2100,7 +2427,13 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     severe_kpi = kpi_text(severe, balanced_pcts["severe"], filtered_total)
 
 
-    color_map = {"normal": "#10b981", "mild": "#f59e0b", "moderate": "#f97316", "severe": "#f43f5e", "incomplete": "#475569"}
+    color_map = {
+        "normal": "#10b981", 
+        "mild": "#f97316", 
+        "moderate": "#eab308", 
+        "severe": "#ef4444", 
+        "incomplete": "#94a3b8"
+    }
 
     table_order = [
         "Sl.No", "ID", "enrollment_date", "BlockCode", "Area Code", "PSU Name",
@@ -2232,6 +2565,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     benif_bar = go.Figure(go.Bar(
         x=labels_with_codes,
         y=benif_counts.values,
+        orientation='v',
         marker=dict(
             color="#6366f1",
             line=dict(color="#312e81", width=2)
@@ -2246,6 +2580,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         margin=dict(t=40, b=110, l=40, r=20),
         xaxis=dict(
             title=dict(text="Beneficiary Code", standoff=0), 
+            type='category',
             automargin=True, 
             showgrid=False, 
             tickfont=dict(size=12, color=t["tick"])
@@ -2263,7 +2598,8 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     # Anemia pie
     # Use explicit counts to ensure alignment with KPI cards
     # "Normal" here represents "Non-Anemic" (Total - Anemic) to match the "100 - Prevalence" logic
-    non_anemic_count = filtered_total - (mild + moderate + severe)
+    anemic_sum = float(mild) + float(moderate) + float(severe)
+    non_anemic_count = float(filtered_total) - anemic_sum
     
     # Define explicit data for the pie to match KPIs exactly
     pie_labels = ["Normal", "Mild", "Moderate", "Severe"]
@@ -2273,10 +2609,10 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     # Get pre-calculated balanced percentages for display text
     # This ensures the pie chart shows the EXACT same % as the cards
     pie_texts = [
-        f"{balanced_pcts['normal']}%",
-        f"{balanced_pcts['mild']}%",
-        f"{balanced_pcts['moderate']}%",
-        f"{balanced_pcts['severe']}%"
+        f"{balanced_pcts['normal']:.2f}%",
+        f"{balanced_pcts['mild']:.2f}%",
+        f"{balanced_pcts['moderate']:.2f}%",
+        f"{balanced_pcts['severe']:.2f}%"
     ]
     
     # Filter out zero values to avoid messy empty slices
@@ -2336,7 +2672,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     psu_summaries = []
     for psu in village_anemia.index:
         counts = village_anemia.loc[psu]
-        summary = f"<span style='font-size:16px; color:#1e293b'><b>{psu}</b></span><br>"
+        summary = f"<span style='font-size:16px; color:{t['hover_text']}'><b>{psu}</b></span><br>"
         # Using Category names the user requested
         summary += f"Severe: <b>{counts.get('severe', 0)}</b><br>"
         summary += f"Moderate: <b>{counts.get('moderate', 0)}</b><br>"
@@ -2351,6 +2687,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
                 name=cat.capitalize(), 
                 x=village_anemia.index, # Setting X to Name for Header
                 y=village_anemia[cat], 
+                orientation='v',
                 customdata=psu_summaries, 
                 hovertemplate="%{customdata}<extra></extra>",
                 marker=dict(
@@ -2369,6 +2706,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             title=dict(text="Area Code", standoff=0), 
             tickvals=village_anemia.index, # Map Names to Ticks
             ticktext=village_area_codes, # Show Codes on Ticks
+            type='category',
             automargin=True, 
             showgrid=False, 
             tickfont=dict(size=11, color=t["tick"]),
@@ -2409,21 +2747,22 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         stats["area_code"] = stats["PSU Name"].map(psu_to_code).astype(str)
         
         hgb_stats_fig.add_trace(go.Bar(
+            name='Mean HGB',
             x=stats["PSU Name"],
             y=stats["mean"],
+            orientation='v',
             error_y=dict(type='data', array=stats["std"], visible=True, color="#312e81", thickness=2, width=6),
             marker=dict(
                 color="#6366f1",
                 line=dict(color="#312e81", width=2),
             ),
             opacity=0.9,
-            name="Mean HGB",
-            text=stats["mean"],
+            text=stats["mean"].map(lambda x: f"{x:.2f}"),
             textposition="auto",
             textfont=dict(color="white", size=10, family="-apple-system, BlinkMacSystemFont, sans-serif"),
             customdata=stats[["PSU Name", "area_code", "std", "count", "anemic_count"]].values.tolist(),
             hovertemplate=(
-                "<span style='font-size:16px;'><b>%{customdata[1]} - %{customdata[0]}</b></span><br>" +
+                f"<span style='font-size:16px; color:{t['hover_text']}'><b>%{{customdata[1]}} - %{{customdata[0]}}</b></span><br>" +
                 "Mean HGB: <b>%{y} g/dL</b><br>" +
                 "Std Dev: <b>%{customdata[2]}</b><br>" +
                 "Total Samples: <b>%{customdata[3]}</b><br>" +
@@ -2451,6 +2790,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         hovermode="closest",
         xaxis=dict(
             title=dict(text="Area Code", standoff=0), 
+            type='category',
             tickvals=stats["PSU Name"] if not hgb_data.empty else [],
             ticktext=stats["area_code"] if not hgb_data.empty else [],
             automargin=True, 
@@ -2528,6 +2868,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
                     name=cat,
                     x=bmi_ben_counts.index,
                     y=bmi_ben_counts[cat],
+                    orientation='v',
                     marker=dict(
                         color=bmi_colors.get(cat, "#cbd5e1"),
                         line=dict(color="white", width=1)
@@ -2583,7 +2924,11 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             is_valid_asha = asha_name and str(asha_name).lower() not in ["nan", "none", "", "missing"]
             if is_valid_asha:
                 msg = asha_summaries[asha_name]
-                encoded_msg = urllib.parse.quote(msg)
+                # Append individual feedback link for sidebar quick-notify
+                url_id = p_id.replace("/", "--")
+                feedback_url = f"{DASHBOARD_BASE_URL}/asha-feedback/{url_id}"
+                full_msg = f"{msg}\n\nSubmit Feedback: {feedback_url}"
+                encoded_msg = urllib.parse.quote(full_msg)
                 link = f"https://wa.me/{contact}?text={encoded_msg}"
                 wa_btn = html.A(html.I(className="fab fa-whatsapp", style={"color": "#25D366", "marginLeft": "10px", "fontSize": "1.1rem"}), 
                                 href=link, target="_blank")
@@ -2591,10 +2936,10 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         urgent_list.append(html.Div([
             html.Div([
                 html.Span(f"ID: {p_id}", style={"fontWeight": "600"}),
-                html.Span(f" | Hb: {row.get('HGB', 'N/A')}", style={"color": "#ef4444"}),
+                html.Span(f" | Hb: {row.get('HGB', 'N/A')}", style={"color": "var(--cat-severe-text)"}),
             ], style={"display": "flex", "alignItems": "center", "justifyContent": "space-between"}),
             html.Div([
-                html.P(f"{row.get('PSU Name', 'Missing')}", style={"margin": 0, "fontSize": "0.65rem", "color": "#64748b"}),
+                html.P(f"{row.get('PSU Name', 'Missing')}", style={"margin": 0, "fontSize": "0.65rem", "color": "var(--text-muted)"}),
                 wa_btn if wa_btn else html.Span()
             ], style={"display": "flex", "alignItems": "center", "justifyContent": "space-between"})
         ], className="urgent-item"))
@@ -2740,7 +3085,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         block_summaries = []
         for block in block_anemia_counts.index:
             row = block_anemia_counts.loc[block]
-            summary = f"<span style='font-size:16px;'><b>{block}</b></span><br>"
+            summary = f"<span style='font-size:16px; color:{t['hover_text']}'><b>{block}</b></span><br>"
             summary += f"Severe: <b>{row.get('severe', 0)}</b><br>"
             summary += f"Moderate: <b>{row.get('moderate', 0)}</b><br>"
             summary += f"Mild: <b>{row.get('mild', 0)}</b><br>"
@@ -2749,12 +3094,13 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             block_summaries.append(summary)
 
         # Add Traces
-        colors = {"normal": "#10b981", "mild": "#f59e0b", "moderate": "#f97316", "severe": "#ef4444"}
+        colors = {"normal": "#10b981", "mild": "#f97316", "moderate": "#eab308", "severe": "#ef4444"}
         for cat in ["normal", "mild", "moderate", "severe"]: 
             if cat in block_anemia_counts.columns:
                 block_fig.add_trace(go.Bar(
                     x=block_anemia_counts.index,
                     y=block_anemia_counts[cat],
+                    orientation='v',
                     name=cat.capitalize(),
                     marker_color=colors.get(cat, "#ccc"),
                     customdata=block_summaries,
@@ -2769,7 +3115,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             text=block_totals.values,
             mode='text',
             textposition='top center',
-            textfont=dict(color=t["text"], size=12, weight='bold'),
+            textfont=dict(color=t["text"], size=12),
             showlegend=False,
             hoverinfo='text',
             customdata=block_summaries,
@@ -2785,7 +3131,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=t["tick"])),
             font=dict(family="Outfit, sans-serif", color=t["text"]),
             hoverlabel=dict(bgcolor=t["hover_bg"], font_size=13, font_family="var(--font-family)", font_color=t["hover_text"], bordercolor="rgba(99, 102, 241, 0.2)"),
-            xaxis=dict(showgrid=False, tickfont=dict(color=t["tick"])),
+            xaxis=dict(showgrid=False, type='category', tickfont=dict(color=t["tick"])),
             yaxis=dict(showgrid=True, gridcolor=t["grid"], tickfont=dict(color=t["tick"]))
         )
 
@@ -2809,7 +3155,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             prev = block_prevalence.loc[block]
             
             summary = f"<span style='font-size:16px;'><b>{block}</b></span><br>"
-            summary += f"Prevalence: <b>{prev}%</b><br>"
+            summary += f"Prevalence: <b>{prev:.2f}%</b><br>"
             summary += f"Anemic Cases: <b>{int(anemic)}</b><br>"
             summary += f"Total Assessed: <b>{int(b_total)}</b>"
             prev_summaries.append(summary)
@@ -2818,7 +3164,8 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         block_prev_fig.add_trace(go.Bar(
             x=block_prevalence.index,
             y=block_prevalence.values,
-            text=[f"{v}%" for v in block_prevalence.values],
+            orientation='v',
+            text=[f"{v:.2f}%" for v in block_prevalence.values],
             textposition='auto',
             name="Prevalence",
             marker_color="#8b5cf6", # Violet for prevalence
@@ -2833,7 +3180,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             margin=dict(l=20, r=20, t=20, b=20),
             font=dict(family="Outfit, sans-serif", color=t["text"]),
             hoverlabel=dict(bgcolor=t["hover_bg"], font_size=13, font_family="var(--font-family)", font_color=t["hover_text"], bordercolor="rgba(99, 102, 241, 0.2)"),
-            xaxis=dict(showgrid=False, tickfont=dict(color=t["tick"])),
+            xaxis=dict(showgrid=False, type='category', tickfont=dict(color=t["tick"])),
             yaxis=dict(showgrid=True, gridcolor=t["grid"], tickfont=dict(color=t["tick"]), range=[0, 100], title="Prevalence (%)")
         )
 
@@ -2845,220 +3192,119 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
 
 # =========================
 # EXPORT CALLBACKS
-# =========================
 @app.callback(
-    Output("reset-notification-trigger", "data", allow_duplicate=True),
-    Input({"type": "btn-reset-asha", "index": ALL}, "n_clicks"),
-    prevent_initial_call=True
-)
-def reset_asha_status(n_clicks):
-    ctx = callback_context
-    if not ctx.triggered:
-        return no_update
-        
-    # Get the button that was clicked
-    button_id = ctx.triggered[0]["prop_id"].split(".")[0]
-    triggered_value = ctx.triggered[0]["value"]
-    
-    # HARDENING: Ignore if n_clicks is None or 0 (Ghost trigger on creation)
-    if not triggered_value:
-        return no_update
-        
-    try:
-        id_dict = json.loads(button_id)
-        asha_to_reset = id_dict.get("index")
-    except:
-        return no_update
-        
-    if not asha_to_reset:
-        return no_update
-        
-    print(f"DEBUG: RESET TRIGGERED for {asha_to_reset}. n_clicks={triggered_value}")
-    
-    # Clear cache entries for this Asha
-    # Handle "Asha Details Missing" which maps to empty string prefix "_"
-    if asha_to_reset == "Asha Details Missing":
-        keys_to_remove = [k for k in NOTIFIED_CACHE.keys() if k.startswith("_")]
-    else:
-        keys_to_remove = [k for k in NOTIFIED_CACHE.keys() if k.startswith(f"{asha_to_reset}_")]
-        
-    for k in keys_to_remove:
-        del NOTIFIED_CACHE[k]
-        
-    save_notified_cache()
-    
-    # Trigger dashboard update
-    return datetime.now().timestamp()
-
-@app.callback(
-    Output("reset-notification-trigger", "data", allow_duplicate=True),
-    Input({"type": "btn-notify-asha", "index": ALL}, "n_clicks"),
-    [State("stored-data", "data")],
-    prevent_initial_call=True
-)
-def update_asha_notification_status(n_clicks, stored_dict):
-    ctx = callback_context
-    if not ctx.triggered:
-        return no_update
-        
-    # Get the button that was clicked
-    button_id = ctx.triggered[0]["prop_id"].split(".")[0]
-    triggered_value = ctx.triggered[0]["value"]
-    
-    # HARDENING: Ignore if n_clicks is None or 0
-    if not triggered_value:
-        return no_update
-
-    try:
-        id_dict = json.loads(button_id)
-        asha_clicked = id_dict.get("index")
-    except:
-        return no_update
-        
-    # Check if a click actually happened (n_clicks > 0)
-    # Since we use 'href', we need to be careful. But 'n_clicks' usually increments.
-    # We iterate n_clicks to see if any are > 0, but since ALL is used, n_clicks is a list.
-    # ctx.triggered gives us the specific one.
-    
-    # Check simple validity
-    if not asha_clicked or not stored_dict:
-        return no_update
-
-    print(f"DEBUG: NOTIFY TRIGGERED for {asha_clicked}. n_clicks={triggered_value}")
-    
-    df = pd.DataFrame(stored_dict["records"])
-    
-    # Filter for this Asha
-    # Handle "Asha Details Missing"
-    if asha_clicked == "Asha Details Missing":
-        # Missing or empty Asha name
-        # We need to find rows where Asha_Worker is missing/nan/empty
-        # AND are anemic (since summary only includes anemic)
-        mask_asha = df["Asha_Worker"].isna() | (df["Asha_Worker"] == "") | (df["Asha_Worker"].str.lower() == "nan")
-    else:
-        mask_asha = df["Asha_Worker"] == asha_clicked
-        
-    mask_anemia = df["anemia_category"].str.lower().isin(["mild", "moderate", "severe"])
-    
-    target_rows = df[mask_asha & mask_anemia]
-    
-    now_str = datetime.now().strftime("%d/%m %H:%M")
-    count_updated = 0
-    
-    load_notified_cache()
-    
-    for _, row in target_rows.iterrows():
-        p_id = row.get("ID")
-        a_name = row.get("Asha_Worker", "")
-        if not a_name or str(a_name).lower() in ["nan", "none", "missing"]:
-            a_name = ""
-            
-        key = f"{a_name}_{p_id}"
-        
-        # Mark as notified
-        NOTIFIED_CACHE[key] = now_str
-        count_updated += 1
-        
-    if count_updated > 0:
-        save_notified_cache()
-        print(f"DEBUG: Automatically marked {count_updated} subjects as Sent.")
-        return datetime.now().timestamp()
-        
-    return no_update
-
-@app.callback(
-    Output("reset-notification-trigger", "data", allow_duplicate=True),
-    [Input("severe-table", "active_cell"),
+    Output("reset-trigger-v2", "data"),
+    [Input({"type": "btn-reset-asha", "index": ALL}, "n_clicks"),
+     Input({"type": "btn-notify-asha", "index": ALL}, "n_clicks"),
+     Input("severe-table", "active_cell"),
      Input("moderate-table", "active_cell"),
      Input("mild-table", "active_cell")],
-    [State("severe-table", "derived_virtual_data"),
+    [State("stored-data", "data"),
+     State("severe-table", "derived_virtual_data"),
      State("moderate-table", "derived_virtual_data"),
      State("mild-table", "derived_virtual_data")],
     prevent_initial_call=True
 )
-def handle_table_actions(severe_cell, moderate_cell, mild_cell, severe_data, moderate_data, mild_data):
+def handle_combined_reset_notifications(reset_n, notify_n, sev_cell, mod_cell, mild_cell, stored_dict, sev_data, mod_data, mild_data):
     ctx = callback_context
     if not ctx.triggered:
         return no_update
 
-    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
-    
-    # Determine which table and cell triggered
-    active_cell = None
-    data = None
-    
-    if trigger_id == "severe-table":
-        active_cell = severe_cell
-        data = severe_data
-    elif trigger_id == "moderate-table":
-        active_cell = moderate_cell
-        data = moderate_data
-    elif trigger_id == "mild-table":
-        active_cell = mild_cell
-        data = mild_data
+    trigger_id_full = ctx.triggered[0]["prop_id"]
+    trigger_id = trigger_id_full.split(".")[0]
+    triggered_value = ctx.triggered[0]["value"]
+
+    # 1. TRIGGER: RESET ASHA STATUS (Button clicking in summary area)
+    if "btn-reset-asha" in trigger_id:
+        if not triggered_value: return no_update
+        try:
+            id_dict = json.loads(trigger_id)
+            asha_to_reset = id_dict.get("index")
+        except: return no_update
         
-    if not active_cell or not data:
-        return no_update
+        if not asha_to_reset: return no_update
+        print(f"DEBUG: RESET TRIGGERED for {asha_to_reset}")
         
-    col_id = active_cell.get("column_id")
-    
-    # Only react to Reset or WhatsApp columns
-    if col_id not in ["reset_btn", "whatsapp"]:
-        return no_update
+        if asha_to_reset == "Asha Details Missing":
+            keys_to_remove = [k for k in NOTIFIED_CACHE.keys() if k.startswith("_")]
+        else:
+            keys_to_remove = [k for k in NOTIFIED_CACHE.keys() if k.startswith(f"{asha_to_reset}_")]
+            
+        for k in keys_to_remove: NOTIFIED_CACHE.pop(k, None)
+        save_notified_cache()
+        return datetime.now().timestamp()
+
+    # 2. TRIGGER: NOTIFY ASHA (Automatic marking of all subjects for an Asha)
+    elif "btn-notify-asha" in trigger_id:
+        if not triggered_value or not stored_dict: return no_update
+        try:
+            id_dict = json.loads(trigger_id)
+            asha_clicked = id_dict.get("index")
+        except: return no_update
         
-    # Get the row data
-    row_idx = active_cell.get("row")
-    if row_idx is None or row_idx >= len(data):
-        return no_update
+        if not asha_clicked: return no_update
+        print(f"DEBUG: NOTIFY TRIGGERED for {asha_clicked}")
         
-    row = data[row_idx]
-    asha = row.get("Asha_Worker", "")
-    p_id = row.get("ID")
-    
-    # Reload cache to ensure we have the latest state
-    load_notified_cache()
-    
-    # Handle missing/nan asha
-    if not asha or str(asha).lower() in ["nan", "none", "missing"]:
-        asha = ""
+        df = pd.DataFrame(stored_dict["records"])
+        if asha_clicked == "Asha Details Missing":
+            mask_asha = df["Asha_Worker"].isna() | (df["Asha_Worker"] == "") | (df["Asha_Worker"].str.lower() == "nan")
+        else:
+            mask_asha = df["Asha_Worker"] == asha_clicked
+            
+        mask_anemia = df["anemia_category"].str.lower().isin(["mild", "moderate", "severe"])
+        target_rows = df[mask_asha & mask_anemia]
         
-    # ACTION: RESET STATUS
-    if col_id == "reset_btn":
-        id_suffix = f"_{p_id}"
-        keys_to_delete = []
-        
-        # Aggressive search: Find ANY key ending with the ID
-        for k in NOTIFIED_CACHE.keys():
-            if k.endswith(id_suffix):
-                keys_to_delete.append(k)
-                
-        with open("debug_reset.txt", "a") as f:
-            f.write(f"\n--- RESET ACTION: {datetime.now()} ---\n")
-            f.write(f"ID: {p_id}, Keys found: {keys_to_delete}\n")
-        
-        if keys_to_delete:
-            for k in keys_to_delete:
-                del NOTIFIED_CACHE[k]
+        now_str = datetime.now().strftime("%d/%m %H:%M")
+        load_notified_cache()
+        count_updated = 0
+        for _, row in target_rows.iterrows():
+            p_id = row.get("ID")
+            a_name = row.get("Asha_Worker", "") or ""
+            if str(a_name).lower() in ["nan", "none", "missing"]: a_name = ""
+            NOTIFIED_CACHE[f"{a_name}_{p_id}"] = now_str
+            count_updated += 1
+            
+        if count_updated > 0:
             save_notified_cache()
             return datetime.now().timestamp()
 
-    # ACTION: MARK AS SENT (click on WhatsApp link)
-    elif col_id == "whatsapp":
-        # Construct key using current Asha name (or empty)
-        key = f"{asha}_{p_id}"
-        now_str = datetime.now().strftime("%d/%m %H:%M")
-        
-        # Only update if not already there (or update timestamp? User might want to re-notify)
-        # Let's always update to show latest action
-        NOTIFIED_CACHE[key] = now_str
-        
-        with open("debug_reset.txt", "a") as f:
-            f.write(f"\n--- NOTIFY ACTION: {datetime.now()} ---\n")
-            f.write(f"ID: {p_id}, Key set: {key}\n")
+    # 3. TRIGGER: TABLE ACTIONS (Individual Row Reset or Mark as Sent)
+    elif trigger_id in ["severe-table", "moderate-table", "mild-table"]:
+        active_cell = None
+        data = None
+        if trigger_id == "severe-table":
+            active_cell, data = sev_cell, sev_data
+        elif trigger_id == "moderate-table":
+            active_cell, data = mod_cell, mod_data
+        elif trigger_id == "mild-table":
+            active_cell, data = mild_cell, mild_data
             
-        save_notified_cache()
-        return datetime.now().timestamp()
+        if not active_cell or not data: return no_update
+        col_id = active_cell.get("column_id")
+        if col_id not in ["reset_btn", "whatsapp"]: return no_update
         
+        row_idx = active_cell.get("row")
+        if row_idx is None or row_idx >= len(data): return no_update
+        
+        row = data[row_idx]
+        asha = row.get("Asha_Worker", "") or ""
+        p_id = row.get("ID")
+        if str(asha).lower() in ["nan", "none", "missing"]: asha = ""
+        
+        load_notified_cache()
+        
+        if col_id == "reset_btn":
+            id_suffix = f"_{p_id}"
+            keys_to_delete = [k for k in NOTIFIED_CACHE.keys() if k.endswith(id_suffix)]
+            if keys_to_delete:
+                for k in keys_to_delete: NOTIFIED_CACHE.pop(k, None)
+                save_notified_cache()
+                return datetime.now().timestamp()
+        elif col_id == "whatsapp":
+            NOTIFIED_CACHE[f"{asha}_{p_id}"] = datetime.now().strftime("%d/%m %H:%M")
+            save_notified_cache()
+            return datetime.now().timestamp()
+
     return no_update
 
 @app.callback(
@@ -3342,7 +3588,143 @@ def manage_queue(n_clear, n_removes, current_queue):
         
     return no_update
 
-# # Theme Toggle Logic
+# # Track Page Feedback Monitoring Callback
+# @app.callback(
+#     [Output("track-feedback-table", "data"),
+#      Output("track-feedback-table", "columns")],
+#     [Input("url", "pathname"),
+#      Input("stored-data", "data"),
+#      Input("btn-refresh-track", "n_clicks")]
+# )
+# def update_track_page_feedback(pathname, stored_data, n_refresh):
+#     if not pathname or pathname.strip("/") != "track":
+#         return [], []
+#         
+#     print(f"DEBUG: update_track_page_feedback triggered for {pathname}")
+#     
+#     # Initialize empty feedback_df
+#     feedback_df = pd.DataFrame()
+#     
+#     if stored_data and "records" in stored_data:
+#         df = pd.DataFrame(stored_data["records"])
+#         if "Status" in df.columns:
+#             feedback_df = df[df["Status"].str.contains("Feedback:", na=False)].copy()
+#         
+#     # --- DEMONSTRATION MODE: Inject Sample Data if no real feedback exists ---
+#     if feedback_df.empty:
+#         print("DEBUG: Injecting Demo Data for Track Page")
+#         demo_data = [
+#             {"ID": "DEMO-101", "Name": "Ramesh (Sample)", "PSU Name": "Yelburga", "Asha_Worker": "Laxmi", "Status": "WhatsApp Feedback: Received", "Remarks": "Regular Follow-up", "IFA_Tablets": 30, "IFA_Syrup_ml": 0, "Counseling_Provided": "Yes", "Benificiery": "Adolescent Boys", "anemia_category": "mild"},
+#             {"ID": "DEMO-102", "Name": "Sita (Sample)", "PSU Name": "Kushtagi", "Asha_Worker": "Meena", "Status": "Asha Feedback: Visited", "Remarks": "Advised diet", "IFA_Tablets": 0, "IFA_Syrup_ml": 15, "Counseling_Provided": "Yes", "Benificiery": "6-23 months", "anemia_category": "moderate"},
+#             {"ID": "DEMO-103", "Name": "Priyanka (Sample)", "PSU Name": "Gangavathi", "Asha_Worker": "Savita", "Status": "WhatsApp Feedback: Active Record", "Remarks": "WhatsApp Update", "IFA_Tablets": 15, "IFA_Syrup_ml": 0, "Counseling_Provided": "No", "Benificiery": "Pregnant Women", "anemia_category": "severe"}
+#         ]
+#         feedback_df = pd.DataFrame(demo_data)
+#         
+#     if feedback_df.empty:
+#         return [], []
+#         
+#     # Sort by last updated (if exists) or ID
+#     sort_col = "last_updated" if "last_updated" in feedback_df.columns else "ID"
+#     feedback_df = feedback_df.sort_values(sort_col, ascending=False)
+#     
+#     # Add Guideline Recommendation
+#     feedback_df["Guideline Recommendation"] = feedback_df.apply(
+#         lambda row: get_anemia_guideline(row.get("Benificiery", ""), row.get("anemia_category", "normal")), 
+#         axis=1
+#     )
+#     
+#     # Define columns to show
+#     display_cols = ["ID", "Name", "PSU Name", "Asha_Worker", "Status", "Remarks", "IFA_Tablets", "IFA_Syrup_ml", "Counseling_Provided", "Guideline Recommendation"]
+#     existing_cols = [c for c in display_cols if c in feedback_df.columns]
+#     
+#     # Custom labels for headers
+#     col_labels = {
+#         "IFA_Tablets": "Tablets Given",
+#         "IFA_Syrup_ml": "Syrup (ml)",
+#         "Counseling_Provided": "Counseling",
+#         "PSU Name": "Village",
+#         "Asha_Worker": "Asha Worker"
+#     }
+#     
+#     columns = [{"name": col_labels.get(c, c.replace("_", " ")), "id": c} for c in existing_cols]
+#     data = feedback_df[existing_cols].to_dict("records")
+#     
+#     return data, columns
+
+# # Asha Feedback Submission Callback
+# @app.callback(
+#     [Output("feedback-response-msg", "children"),
+#      Output("feedback-response-msg", "style")],
+#     Input("btn-submit-feedback", "n_clicks"),
+#     [State("feedback-p-id", "data"),
+#      State("feedback-status", "value"),
+#      State("feedback-remarks", "value"),
+#      State("feedback-ifa-tablets", "value"),
+#      State("feedback-ifa-syrup", "value"),
+#      State("feedback-counseling", "value")],
+#     prevent_initial_call=True
+# )
+# def submit_feedback(n_clicks, p_id, status, remarks, ifa_tabs, ifa_syrup, counseling):
+#     if n_clicks is None:
+#         return "", {}
+#         
+#     try:
+#         # Prepare feedback record
+#         feedback_data = {
+#             "ID": p_id,
+#             "Status": f"Asha Feedback: {status}",
+#             "Remarks": remarks,
+#             "IFA_Tablets": ifa_tabs or 0,
+#             "IFA_Syrup_ml": ifa_syrup or 0,
+#             "Counseling_Provided": "Yes" if counseling and "yes" in counseling else "No",
+#             "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#         }
+#         
+#         # We need to sync this to Google Sheets
+#         # We'll create a minimal DataFrame for syncing
+#         f_df = pd.DataFrame([feedback_data])
+#         
+#         # Trigger background sync
+#         # Note: sync_data_to_sheets uses EXCEL_WRITE_URL
+#         threading.Thread(target=sync_data_to_sheets, args=(f_df,), daemon=True).start()
+#         
+#         return html.Div([
+#             html.I(className="fas fa-check-circle me-2"),
+#             "Feedback submitted successfully! Thank you."
+#         ]), {"color": "#10b981"}
+#     except Exception as e:
+#         print(f"ERROR in feedback submission: {str(e)}")
+#         return html.Div([
+#             html.I(className="fas fa-exclamation-circle me-2"),
+#             "Error submitting feedback. Please try again."
+#         ]), {"color": "#ef4444"}
+
+# Sync Theme Toggle Icons (Commented out)
+# @app.callback(
+#     [Output("theme-toggle", "children"),
+#      Output("theme-toggle-mobile", "children")],
+#     [Input("theme-store", "data")]
+# )
+# def update_theme_icons(theme):
+#     # Standardize theme value
+#     current_theme = theme if theme in ["light-theme", "dark-theme"] else "light-theme"
+#     
+#     # Use fa-solid for FA6 compatibility
+#     icon_class = "fa-solid fa-moon" if current_theme == "light-theme" else "fa-solid fa-sun"
+#     
+#     # Desktop Icon (Returning with a wrapper for better control if needed)
+#     desktop_icon = html.I(className=icon_class)
+#     
+#     # Mobile Icon
+#     mobile_icon = [
+#         html.I(className=icon_class),
+#         html.Span("Toggle Theme", style={"marginLeft": "10px"})
+#     ]
+#     
+#     # return desktop_icon, mobile_icon
+#     return None, None
+
+# Theme Toggle Logic (Commented out)
 # app.clientside_callback(
 #     ClientsideFunction(namespace="clientside", function_name="toggle_theme"),
 #     Output("theme-store", "data"),
@@ -3352,10 +3734,10 @@ def manage_queue(n_clear, n_removes, current_queue):
 #     prevent_initial_call=True
 # )
 
-# # Clientside initialization to apply persistent theme from dcc.Store
+# Clientside initialization to apply persistent theme from dcc.Store (Commented out)
 # app.clientside_callback(
 #     ClientsideFunction(namespace="clientside", function_name="init_theme"),
-#     Output("theme-toggle", "children"),
+#     Output("theme-trigger", "children"),
 #     Input("theme-store", "data"),
 #     Input("url", "pathname")
 # )
@@ -3377,3 +3759,4 @@ app.clientside_callback(
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
