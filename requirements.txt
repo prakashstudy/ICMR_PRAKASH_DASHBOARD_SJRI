@@ -7,3 +7,4 @@ openpyxl
 gunicorn
 waitress
 Flask
+python-dotenv
