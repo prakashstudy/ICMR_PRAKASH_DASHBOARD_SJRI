@@ -3,21 +3,19 @@ from dash import dcc, html, dash_table, no_update, callback_context, ClientsideF
 import dash_bootstrap_components as dbc
 from dash.dependencies import Input, Output, State, ALL
 import plotly.graph_objects as go
-import plotly.express as px
+from dotenv import load_dotenv
 import pandas as pd
-import numpy as np
 import json
 import re
-import os
-import flask
-import traceback
 import urllib.parse
-from dotenv import load_dotenv
-load_res = load_dotenv() # Load variables from .env file
-
-from datetime import datetime, date
+from datetime import datetime
 import threading
 import hashlib
+
+
+
+import flask
+import os
 from who_standards import calculate_bmi_z_score, classify_who_z_score
 
 # =========================
@@ -80,18 +78,7 @@ app = dash.Dash(__name__,
                     "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
                 ], 
                 suppress_callback_exceptions=True,
-)
-
-# Fix for 404 error on page refresh for multi-page Dash app
-@app.server.errorhandler(404)
-def handle_404(e):
-    # If the user visits /track, /treat, etc. directly or refreshes, serve the Dash index
-    path = flask.request.path.rstrip('/')
-    # Broad check for Dash internal pages and common sub-paths
-    if path in ['/track', '/treat', '/test', '/home', '/', ''] or path.startswith(('/track', '/treat', '/test', '/home')):
-        return app.index()
-    # Otherwise return normal 404
-    return "404 Not Found", 404
+                eager_loading=True)
 app.scripts.config.serve_locally = True
 app.css.config.serve_locally = True
 server = app.server
@@ -108,126 +95,9 @@ def serve_assets(filename):
 # =========================
 # LOAD DATA (URL or CSV)
 # =========================
-DATA_SOURCE_URL = os.getenv("DATA_SOURCE_URL", "") 
-EXCEL_WRITE_URL = os.getenv("EXCEL_WRITE_URL", "")
-# =========================
-# WHATSAPP BUSINESS API CONFIG (COMMENTED OUT)
-# =========================
-# WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "prakash_verify_token_2025")
-# WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
-# WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
-
-# --- WhatsApp API Helper (Commented out) ---
-# def send_whatsapp_message(to_phone, message_text):
-#     """
-#     Sends a WhatsApp message using the Meta Graph API.
-#     Note: To send to a new user, you typically need to use a Template message.
-#     """
-#     if not WHATSAPP_ACCESS_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
-#         print("DEBUG: WhatsApp API credentials missing. Skipping send.")
-#         return False
-
-#     url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
-#     headers = {
-#         "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
-#         "Content-Type": "application/json"
-#     }
-    
-#     # Example Payload for a Text Message (Only works if user messaged you in last 24h)
-#     payload = {
-#         "messaging_product": "whatsapp",
-#         "recipient_type": "individual",
-#         "to": to_phone,
-#         "type": "text",
-#         "text": {"body": message_text}
-#     }
-
-#     # IMPORTANT: Actual API call is commented out until API key is ready
-#     print(f"DEBUG: [DRAFT] Would send WhatsApp to {to_phone}: {message_text[:50]}...")
-    
-#     # try:
-#     #     import requests
-#     #     response = requests.post(url, json=payload, headers=headers, timeout=10)
-#     #     if response.status_code == 200:
-#     #         print(f"DEBUG: WhatsApp message sent successfully to {to_phone}")
-#     #         return True
-#     #     else:
-#     #         print(f"DEBUG: WhatsApp send failed: {response.status_code} - {response.text}")
-#     #         return False
-#     # except Exception as e:
-#     #     print(f"DEBUG: WhatsApp send exception: {e}")
-#     #     return False
-#     return True
-
-# --- WhatsApp Webhook Routes (Commented out) ---
-# @server.route('/whatsapp-webhook', methods=['GET'])
-# def verify_whatsapp_webhook():
-#     """Verification endpoint for Meta Developer Console."""
-#     mode = flask.request.args.get("hub.mode")
-#     token = flask.request.args.get("hub.verify_token")
-#     challenge = flask.request.args.get("hub.challenge")
-
-#     if mode == "subscribe" and token == WHATSAPP_VERIFY_TOKEN:
-#         print("DEBUG: WhatsApp Webhook verified successfully!")
-#         return challenge, 200
-#     else:
-#         print("DEBUG: WhatsApp Webhook verification failed.")
-#         return "Verification failed", 403
-
-# @server.route('/whatsapp-webhook', methods=['POST'])
-# def handle_whatsapp_message():
-#     """Handles incoming messages from Meta."""
-#     data = flask.request.get_json()
-#     print(f"DEBUG: Incoming WhatsApp Webhook: {json.dumps(data)[:500]}")
-
-#     try:
-#         if data.get("object") == "whatsapp_business_account":
-#             for entry in data.get("entry", []):
-#                 for change in entry.get("changes", []):
-#                     value = change.get("value", {})
-#                     if "messages" in value:
-#                         for msg in value.get("messages", []):
-#                             sender_phone = msg.get("from")
-#                             msg_body = msg.get("text", {}).get("body", "").strip()
-                            
-#                             print(f"DEBUG: Message from {sender_phone}: {msg_body}")
-                            
-#                             # Record the response
-#                             # We can try to match the sender_phone with an ASHA's number
-#                             record_whatsapp_response(sender_phone, msg_body)
-                            
-#         return "EVENT_RECEIVED", 200
-#     except Exception as e:
-#         print(f"DEBUG: Error processing WhatsApp webhook: {e}")
-#         return "INTERNAL_ERROR", 500
-
-# def record_whatsapp_response(phone, text):
-#     """Parses ASHA response and saves it to local cache/sheets."""
-#     # Logic to identify ASHA and the subject they are referring to
-#     # This might require some simple parsing like "ID 123 Improved"
-#     new_response = {
-#         "source": "whatsapp",
-#         "phone": phone,
-#         "text": text,
-#         "timestamp": datetime.now().isoformat()
-#     }
-    
-#     # For now, let's just log it to a dedicated file
-#     try:
-#         responses_file = "whatsapp_responses.json"
-#         existing_data = []
-#         if os.path.exists(responses_file):
-#             with open(responses_file, "r") as f:
-#                 existing_data = json.load(f)
-        
-#         existing_data.append(new_response)
-#         with open(responses_file, "w") as f:
-#             json.dump(existing_data, f)
-            
-#         print(f"DEBUG: Recorded WhatsApp response from {phone}")
-#     except Exception as e:
-#         print(f"DEBUG: Failed to save WhatsApp response: {e}")
-
+DATA_SOURCE_URL = "https://script.google.com/macros/s/AKfycbzazlpEvo3qo2pVhp0fvcpUrlcyR9QRE2SYED5fu-5Og5oVBHZ-EIbaOR-VNCwEIC6JdQ/exec" 
+# Paste your deployed Google Apps Script Web App URL here to enable write-back
+EXCEL_WRITE_URL = "https://script.google.com/macros/s/AKfycbyfwRVnmXLB8qQt31kIGBmC1NxZ_atYNnM4h-M0sREFpIJJ5au8X9uu8Olwch80XRNpqQ/exec" 
 LAST_SYNC_CACHE = {} 
 CACHE_FILE = "sync_cache.json"
 
@@ -277,36 +147,8 @@ def save_notified_cache():
     except Exception as e:
         print(f"DEBUG: Failed to save notified cache: {e}")
 
-# --- Tracking Responses Cache ---
-TRACKING_RESPONSES_FILE = "tracking_responses.json"
-TRACKING_RESPONSES_CACHE = []
-
-# Constants from IR Proposal
-TRACKING_OUTCOMES = ["Improved (Resolved)", "Improved (Still Anemic)", "No Improvement", "Deteriorated/Severe"]
-TRACKING_ACTIONS = ["Home Visit", "Dispensed IFA Tablets", "Dispensed IFA Syrup", "Diet Counseling", "Referral to PHC/Specialist"]
-COMPLIANCE_STATUSES = ["Regular (Compliant)", "Irregular", "Not Taking"]
-
-def load_tracking_responses():
-    global TRACKING_RESPONSES_CACHE
-    if os.path.exists(TRACKING_RESPONSES_FILE):
-        try:
-            with open(TRACKING_RESPONSES_FILE, "r") as f:
-                TRACKING_RESPONSES_CACHE = json.load(f)
-        except Exception as e:
-            print(f"DEBUG: Failed to load tracking responses: {e}")
-            TRACKING_RESPONSES_CACHE = []
-    else:
-        TRACKING_RESPONSES_CACHE = []
-
-def save_tracking_responses():
-    try:
-         with open(TRACKING_RESPONSES_FILE, "w") as f:
-            json.dump(TRACKING_RESPONSES_CACHE, f)
-    except Exception as e:
-        print(f"DEBUG: Failed to save tracking responses: {e}")
-
-# Initial load for tracking
-load_tracking_responses()
+# Initial load for notifications
+load_notified_cache()
 
 # BENEFICIARY_MAP moved to GLOBAL CONSTANTS at top of file
 
@@ -1428,7 +1270,7 @@ def get_treat_layout():
             dbc.Row([
                 dbc.Col(html.H4("Geospatial High-Risk Distribution", style={"fontWeight": "700"}), width=True),
                 # dbc.Col(
-                #     dbc.Button([html.I(className="fas fa-paper-plane me-2"), "Bulk Notify (Business API)"], 
+                #     dbc.Button([html.I(className="fas fa-paper-plane me-2"), "Bulk Notify Ashas"], 
                 #                id="btn-bulk-notify", color="primary", size="sm", 
                 #                className="shadow-sm", style={"borderRadius": "8px"}),
                 #     width="auto"
@@ -1437,7 +1279,7 @@ def get_treat_layout():
 
             html.Div([
                 html.P("Hover over markers to see assigned Asha Workers and beneficiary breakdown.", style={"color": "#64748b", "fontSize": "0.9rem"}),
-                dcc.Graph(id="geospatial-map", config={"responsive": True}, style=MAP_CARD_STYLE),
+                dcc.Graph(id="map", config={"responsive": True}, style=MAP_CARD_STYLE),
             ], className="graph-card", style={"padding": "30px", "marginBottom": "24px"}),
             
             # Notification Queue Section
@@ -1525,11 +1367,12 @@ def get_treat_layout():
             
             get_footer(),
             
-            # Shared placeholders needed for global callbacks (Exclude what Dashboard page HAS)
+            # Shared placeholders for Dashboard components (Exclude what Treat page HAS)
             *get_shared_placeholders([
                 "block-code-dropdown", "location-dropdown", "benificiery-dropdown", "anemia-dropdown", "btn-clear",
-                "urgent-alerts-list", "total", "severe-count", "moderate-count", "mild-count", "avg-hgb", "geospatial-map", 
-                "severe-table", "moderate-table", "mild-table", "table", "weekly-summary-container"
+                "urgent-alerts-list", "total", "severe-count", "moderate-count", "mild-count", "avg-hgb", "map", 
+                "severe-table", "moderate-table", "mild-table", "table", "weekly-summary-container",
+                "theme-toggle-mobile"
             ])
         ], id="main-content", className="main-content")
 
@@ -1561,236 +1404,6 @@ def get_track_layout():
         ], id="main-content", className="main-content", 
         style={"marginLeft": "0", "width": "100%", "padding": "0 20px"})
     ], id="track-layout-container")
-
-def get_track_layout_original_disabled():
-    return html.Div([
-        # Sidebar with Filters (Consistent with Treat/Test pages)
-        html.Div([
-            html.Div([
-                html.Div([
-                    html.P("Anaemia Tracking & Follow-up", 
-                           style={"fontSize": "0.75rem", "fontWeight": "700", "color": "var(--text-main)", "margin": "0", "letterSpacing": "0.05em", "textTransform": "uppercase"}),
-                    html.P("Koppal Tracking Phase", 
-                           style={"fontSize": "0.7rem", "color": "var(--text-muted)", "margin": "2px 0 0 0"})
-                ], style={"padding": "0 0 15px 0", "marginBottom": "15px", "borderBottom": "1px solid var(--glass-border)"}),
-                
-                html.Div([
-                    html.Div([
-                        html.P("Navigation", className="sidebar-label"),
-                        dbc.Nav([
-                            dbc.NavLink("Test", href="/", active="exact", className="mobile-nav-link"),
-                            dbc.NavLink("Treat", href="/treat", active="exact", className="mobile-nav-link"),
-                            dbc.NavLink("Track", href="/track", active="exact", className="mobile-nav-link"),
-                        ], vertical=True, pills=True),
-                    ], className="filter-group"),
-                ], className="sidebar-tile mobile-only-extras"),
-
-                html.Div([
-                    html.Label("Block Code", className="sidebar-label"),
-                    dcc.Dropdown(id="block-code-dropdown", options=[], multi=True, value=[], placeholder="All Blocks"),
-                ], className="filter-group"),
-
-                html.Div([
-                    html.Label("Locality", className="sidebar-label"),
-                    dcc.Dropdown(id="location-dropdown", options=[], multi=True, value=[], placeholder="All Locations"),
-                ], className="filter-group"),
-                
-                html.Div([
-                    html.Label("Beneficiary Type", className="sidebar-label"),
-                    dcc.Dropdown(id="benificiery-dropdown", options=[], multi=True, value=[], placeholder="All Beneficiaries"),
-                ], className="filter-group"),
-
-                html.Div([
-                    html.Label("Anemia Category", className="sidebar-label"),
-                    dcc.Dropdown(id="anemia-dropdown", options=[{"label": x.capitalize(), "value": x} for x in anemia_list], multi=True, value=[], placeholder="All Categories"),
-                ], className="filter-group"),
-
-                dbc.Button("Clear All Filters", id="btn-clear", color="secondary", outline=True, size="sm", className="w-100"),
-            ], className="sidebar-tile"),
-
-            # Tracking Summary Tile
-            html.Div([
-                html.Div([
-                    html.Label("Tracking Status", className="sidebar-label", style={"color": "var(--primary-color)"}),
-                    html.Div([
-                        html.P("Follow-up required for high-risk subjects identified in the 'Treat' phase.", 
-                               style={"fontSize": "0.7rem", "color": "var(--text-muted)", "marginBottom": "10px"}),
-                    ]),
-                ], className="filter-group", style={"marginBottom": "0"}),
-            ], className="sidebar-tile", style={"backgroundColor": "var(--primary-light-rgba)"}),
-        ], id="sidebar", className="sidebar"),
-
-        # Main Content
-        html.Div([
-            # KPI Row: Tracking Performance
-            dbc.Row([
-                dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-bullhorn kpi-icon"), html.P("Tracking Alerts", className="kpi-label")], className="kpi-header"),
-                    html.H3(id="track-total-alerts", className="kpi-value", children="0")
-                ], className="kpi-card"), xs=12, sm=4),
-
-                dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-check-circle kpi-icon", style={"color": "#10b981"}), html.P("Response Rate", className="kpi-label")], className="kpi-header"),
-                    html.H3(id="track-response-rate", className="kpi-value", children="0%")
-                ], className="kpi-card"), xs=12, sm=4),
-                
-                dbc.Col(html.Div([
-                    html.Div([html.I(className="fas fa-chart-line kpi-icon", style={"color": "#6366f1"}), html.P("Improvement Rate", className="kpi-label")], className="kpi-header"),
-                    html.H3(id="track-improvement-rate", className="kpi-value", children="0%")
-                ], className="kpi-card"), xs=12, sm=4),
-            ], className="mb-4 g-3"),
-
-            # Charts Row: Outcomes & Actions
-            dbc.Row([
-                dbc.Col(html.Div([
-                    html.H5("Subject Outcomes", className="mb-3", style={"fontWeight": "700"}),
-                    dcc.Graph(id="track-outcome-pie", config={"displayModeBar": False}, style={"height": "300px"})
-                ], className="graph-card", style={"padding": "25px"}), md=6),
-                
-                dbc.Col(html.Div([
-                    html.H5("Asha Actions Logged", className="mb-3", style={"fontWeight": "700"}),
-                    dcc.Graph(id="track-action-bar", config={"displayModeBar": False}, style={"height": "300px"})
-                ], className="graph-card", style={"padding": "25px"}), md=6),
-            ], className="mb-4 g-3"),
-
-            # Tracking Queue Table
-            html.Div([
-                html.Div([
-                    html.H4([html.I(className="fas fa-clipboard-list me-2", style={"color": "var(--primary-color)"}), "Asha Tracking Queue"], 
-                           style={"marginBottom": "10px", "fontWeight": "700", "color": "var(--text-main)"}),
-                    html.P("Select a subject to log visit responses and view historical logs.", 
-                           style={"fontSize": "0.85rem", "color": "var(--text-muted)", "marginBottom": "20px"}),
-                    
-                    dash_table.DataTable(
-                        id="track-table",
-                        columns=[
-                            {"name": "ID", "id": "ID"},
-                            {"name": "Village", "id": "PSU Name"},
-                            {"name": "Category", "id": "anemia_category"},
-                            {"name": "Hb", "id": "HGB"},
-                            {"name": "Asha Worker", "id": "Asha_Worker"},
-                            {"name": "Last Visit", "id": "last_visit"},
-                            {"name": "Status", "id": "status"}
-                        ],
-                        data=[],
-                        style_table={"overflowX": "auto"},
-                        style_cell={
-                            "padding": "12px", "textAlign": "left", "fontSize": "0.85rem",
-                            "fontFamily": "var(--font-family)", "border": "none", "backgroundColor": "transparent", "color": "var(--text-main)"
-                        },
-                        style_header={
-                            "backgroundColor": "var(--header-bg)", "color": "var(--primary-color)",
-                            "fontWeight": "700", "border": "none", "textTransform": "uppercase", "fontSize": "0.75rem", "letterSpacing": "0.05em"
-                        },
-                        style_data_conditional=[{"if": {"row_index": "odd"}, "backgroundColor": "rgba(255,255,255,0.02)"}],
-                        row_selectable="single",
-                        page_size=10
-                    )
-                ], className="graph-card", style={"padding": "30px", "marginBottom": "24px"}),
-            ]),
-
-            # Response Form & History (Visible when row selected)
-            html.Div(id="track-details-container"),
-            
-            get_footer(),
-
-            # Store for the selected ID
-            dcc.Store(id="selected-track-id"),
-            
-            # Shared placeholders needed for global callbacks (only exclude what is actually in track layout)
-            *get_shared_placeholders([
-                "block-code-dropdown", "location-dropdown", "benificiery-dropdown", "anemia-dropdown", "btn-clear"
-            ])
-        ], id="main-content", className="main-content"),
-        
-        # Success/Error Notification
-        dbc.Toast(id="track-toast", is_open=False, duration=4000, style={"position": "fixed", "top": 20, "right": 20, "width": 350, "zIndex": 9999})
-    ], id="track-layout-container")
-
-def get_track_details_layout(selected_id):
-    if not selected_id:
-        return html.Div([
-            html.Div([
-                html.I(className="fas fa-mouse-pointer me-2"),
-                "Select a subject from the queue to view details and log visits."
-            ], className="text-muted p-4 text-center border-dashed")
-        ], style={"border": "2px dashed var(--glass-border)", "borderRadius": "15px", "marginTop": "20px"})
-
-    # Filter history for this ID
-    history = [r for r in TRACKING_RESPONSES_CACHE if r.get("ID") == selected_id]
-    history = sorted(history, key=lambda x: x.get("timestamp", ""), reverse=True)
-
-    history_items = []
-    for entry in history:
-        history_items.append(html.Div([
-            html.Div([
-                html.Span(entry.get("visit_date", "No Date"), style={"fontWeight": "700", "fontSize": "0.9rem"}),
-                html.Span(entry.get("outcome", "No Outcome"), className="badge ms-2", 
-                          style={"backgroundColor": "var(--primary-light-rgba)", "color": "var(--primary-color)"})
-            ], className="d-flex align-items-center mb-2"),
-            html.Div([
-                html.P(f"Action: {entry.get('action', 'N/A')}", className="mb-1", style={"fontSize": "0.8rem"}),
-                html.P(f"Compliance: {entry.get('compliance', 'N/A')}", className="mb-1", style={"fontSize": "0.8rem"}),
-                html.P(f"Remarks: {entry.get('remarks', '')}", className="mb-0 text-muted", style={"fontSize": "0.75rem", "fontStyle": "italic"})
-            ], style={"paddingLeft": "15px", "borderLeft": "2px solid var(--primary-light-rgba)"})
-        ], className="mb-4"))
-
-    if not history_items:
-        history_items = [html.P("No historical logs found for this subject.", className="text-muted small")]
-
-    return html.Div([
-        dbc.Row([
-            # Column 1: Log New Visit Form
-            dbc.Col([
-                html.Div([
-                    html.H5(f"Log Asha Visit for ID: {selected_id}", className="mb-4", style={"fontWeight": "700"}),
-                    
-                    dbc.Row([
-                        dbc.Col([
-                            html.Label("Visit Date", className="form-label small"),
-                            dcc.DatePickerSingle(
-                                id="track-visit-date",
-                                date=date.today(),
-                                display_format="DD/MM/YYYY",
-                                className="w-100"
-                            )
-                        ], width=6),
-                        dbc.Col([
-                            html.Label("Action Taken", className="form-label small"),
-                            dcc.Dropdown(id="track-action-dropdown", options=[{"label": x, "value": x} for x in TRACKING_ACTIONS], placeholder="Select Action")
-                        ], width=6),
-                    ], className="mb-3"),
-
-                    dbc.Row([
-                        dbc.Col([
-                            html.Label("Clinical Outcome", className="form-label small"),
-                            dcc.Dropdown(id="track-outcome-dropdown", options=[{"label": x, "value": x} for x in TRACKING_OUTCOMES], placeholder="Select Outcome")
-                        ], width=6),
-                        dbc.Col([
-                            html.Label("Compliance", className="form-label small"),
-                            dcc.Dropdown(id="track-compliance-dropdown", options=[{"label": x, "value": x} for x in COMPLIANCE_STATUSES], placeholder="Select Compliance")
-                        ], width=6),
-                    ], className="mb-3"),
-
-                    html.Div([
-                        html.Label("Remarks / Notes", className="form-label small"),
-                        dbc.Textarea(id="track-remarks", placeholder="Enter any additional observations...", style={"height": "80px"})
-                    ], className="mb-4"),
-
-                    dbc.Button([html.I(className="fas fa-save me-2"), "Submit Visit Log"], 
-                               id="btn-submit-track", color="primary", className="w-100 py-2 shadow-sm", style={"borderRadius": "10px", "fontWeight": "600"})
-                ], className="graph-card h-100", style={"padding": "30px"})
-            ], md=7),
-
-            # Column 2: History Timeline
-            dbc.Col([
-                html.Div([
-                    html.H5("Follow-up History", className="mb-4", style={"fontWeight": "700"}),
-                    html.Div(history_items, style={"maxHeight": "400px", "overflowY": "auto", "padding": "5px"})
-                ], className="graph-card h-100", style={"padding": "30px"})
-            ], md=5)
-        ], className="g-4")
-    ], style={"marginTop": "20px"})
 
 def get_footer():
     return html.Footer([
@@ -1980,7 +1593,7 @@ def get_dashboard_layout():
                 dbc.Col([
                     html.Div([
                         html.H5("Geospatial Distribution", className="graph-title"),
-                        dcc.Graph(id="geospatial-map", config={"responsive": True, "displayModeBar": False}, style=MAP_CARD_STYLE),
+                        dcc.Graph(id="map", config={"responsive": True, "displayModeBar": False}, style=MAP_CARD_STYLE),
                     ], className="graph-card")
                 ], xs=12, xl=8),
                 
@@ -2070,7 +1683,7 @@ def get_dashboard_layout():
             # Shared placeholders for Treat Page components (Exclude what Dashboard page HAS)
             *get_shared_placeholders([
                 "block-code-dropdown", "location-dropdown", "benificiery-dropdown", "anemia-dropdown", "btn-clear", "btn-excel", "btn-csv",
-                "severe-count", "avg-hgb", "diet-count", "geospatial-map", "benificiery-bar", "anemia-pie", 
+                "severe-count", "avg-hgb", "diet-count", "map", "benificiery-bar", "anemia-pie", 
                 "anemia-village-bar", "block-anemia-bar", "block-prevalence-bar", "hgb-stats-bar", "bmi-bar", "table",
                 "prevalence-val", "normal-count", "mild-count", "moderate-count", "total"
             ])
@@ -2088,25 +1701,8 @@ app.layout = html.Div([
     dcc.Store(id="bulk-notification-urls"),
     dcc.Store(id="notification-queue-data", data=[], storage_type="local"),
     dcc.Store(id="reset-notification-trigger", data=0),
+    html.Div(id="bulk-notification-trigger", style={"display": "none"}),
     html.Div(id="mobile-toggle-trigger", style={"display": "none"}),
-    
-    # PERMANENT SHARED PLACEHOLDERS (Prevents ReferenceErrors on Page Swapping)
-    html.Div([
-        html.Div(id="total"), html.Div(id="normal-count"), html.Div(id="moderate-count"), 
-        html.Div(id="severe-count"), html.Div(id="mild-count"), html.Div(id="avg-hgb"), 
-        html.Div(id="diet-count"), html.Div(id="prevalence-val"),
-        dcc.Graph(id="map"), dcc.Graph(id="benificiery-bar"), dcc.Graph(id="anemia-pie"), 
-        dcc.Graph(id="anemia-village-bar"), dcc.Graph(id="block-anemia-bar"), 
-        dcc.Graph(id="block-prevalence-bar"), dcc.Graph(id="hgb-stats-bar"), dcc.Graph(id="bmi-bar"),
-        dash_table.DataTable(id="table"),
-        dcc.Dropdown(id="block-code-dropdown"), dcc.Dropdown(id="location-dropdown"), 
-        dcc.Dropdown(id="benificiery-dropdown"), dcc.Dropdown(id="anemia-dropdown"),
-        html.Div(id="urgent-alerts-list"),
-        dash_table.DataTable(id="severe-table"), dash_table.DataTable(id="moderate-table"), 
-        dash_table.DataTable(id="mild-table"),
-        html.Div(id="notification-queue-container"), html.Div(id="weekly-summary-container"),
-        dbc.Button(id="btn-clear"), dbc.Button(id="btn-excel"), dbc.Button(id="btn-csv"), # dbc.Button(id="btn-bulk-notify"),
-    ], id="permanent-hidden-placeholders", style={"display": "none"}),
     
     dbc.Toast(id="bulk-notify-toast", header="Notification", is_open=False,
               dismissable=True, icon="success", duration=5000, 
@@ -2172,11 +1768,14 @@ app.layout = html.Div([
 )
 def display_page(pathname):
     print(f"DEBUG: display_page called. Path: {pathname}")
+    # theme = theme_data or "dark" # Default to dark if None
     if pathname == "/track":
         return get_track_layout()
     elif pathname == "/treat":
+        print(f"DEBUG: Calling get_treat_layout")
         return get_treat_layout()
     else:
+        # Default to the Main Dashboard (Now under 'Test' branding in Nav)
         return get_dashboard_layout()
 
 @app.callback(
@@ -2184,6 +1783,7 @@ def display_page(pathname):
     Input("url", "pathname")
 )
 def update_nav_buttons(pathname):
+    # Define buttons and their target routes
     buttons = [
         {"name": "Test", "href": "/"},
         {"name": "Treat", "href": "/treat"},
@@ -2193,6 +1793,7 @@ def update_nav_buttons(pathname):
     nav_links = []
     for btn in buttons:
         is_active = pathname == btn["href"]
+        # Special case for root
         if btn["href"] == "/" and pathname not in ["/treat", "/track"]:
             is_active = True
             
@@ -2209,6 +1810,7 @@ def update_nav_buttons(pathname):
 def refresh_data(_):
     df, msg, is_err = load_data()
     
+    # Automatically sync to sheets in a BACKGROUND THREAD to prevent blocking the UI
     if not is_err and not df.empty:
         threading.Thread(target=sync_data_to_sheets, args=(df,), daemon=True).start()
         
@@ -2218,164 +1820,6 @@ def refresh_data(_):
         "is_error": is_err,
         "last_updated": datetime.now().strftime("%H:%M:%S")
     }
-
-@app.callback(
-    [
-        Output("track-total-alerts", "children"),
-        Output("track-response-rate", "children"),
-        Output("track-improvement-rate", "children"),
-        Output("track-outcome-pie", "figure"),
-        Output("track-action-bar", "figure"),
-        Output("track-table", "data"),
-    ],
-    [
-        Input("stored-data", "data"),
-        Input("block-code-dropdown", "value"),
-        Input("location-dropdown", "value"),
-        Input("benificiery-dropdown", "value"),
-        Input("anemia-dropdown", "value"),
-        Input("url", "pathname"),
-    ]
-)
-def update_track_dashboard(stored_data, blocks, locations, beneficiaries, anemia_cats, pathname):
-    if pathname != "/track" or not stored_data:
-        return no_update, no_update, no_update, no_update, no_update, no_update
-
-    try:
-        df = pd.DataFrame(stored_data.get("records", []))
-        if df.empty:
-            print("DEBUG: stored_data['records'] is empty in update_track_dashboard")
-            return "0", "0.00%", "0.00%", go.Figure(), go.Figure(), []
-
-        # 1. Filter High Risk Subjects (Moderate/Severe Anemia)
-        # classify_anemia_who is already running in load_data() and returns lowercase 'moderate', 'severe'
-        high_risk_mask = df["anemia_category"].astype(str).str.lower().str.contains("moderate|severe", na=False)
-        track_df = df[high_risk_mask].copy()
-        
-        print(f"DEBUG: update_track_dashboard: Found {len(track_df)} high-risk subjects from {len(df)} total records")
-
-        # 2. Apply Sidebar Filters
-        if blocks: track_df = track_df[track_df["BlockCode"].isin(blocks)]
-        if locations: track_df = track_df[track_df["Location"].isin(locations)]
-        if beneficiaries: track_df = track_df[track_df["Benificiery"].isin(beneficiaries)]
-        if anemia_cats: 
-            cat_list = [x.lower() for x in anemia_cats]
-            track_df = track_df[track_df["anemia_category"].str.lower().isin(cat_list)]
-
-        total_alerts = len(track_df)
-
-        # 3. Process Responses
-        responses_df = pd.DataFrame(TRACKING_RESPONSES_CACHE)
-        if responses_df.empty:
-            responses_df = pd.DataFrame(columns=["ID", "visit_date", "action", "outcome", "compliance", "remarks", "timestamp"])
-        
-        # Calculate Metrics
-        response_rate = 0.0
-        improvement_rate = 0.0
-        if not responses_df.empty and "ID" in responses_df.columns:
-            responded_ids = responses_df["ID"].unique()
-            # Ensure ID types match for comparison
-            responded_count = len(track_df[track_df["ID"].astype(str).isin([str(x) for x in responded_ids])])
-            response_rate = (responded_count / total_alerts * 100) if total_alerts > 0 else 0
-            
-            # Improvement Rate: % of follow-ups that resulted in 'Improved' or 'Recovered'
-            improved_responses = responses_df[responses_df["outcome"].astype(str).str.lower().str.contains("improved|recovered", na=False)]
-            improvement_rate = (len(improved_responses) / len(responses_df) * 100) if len(responses_df) > 0 else 0
-
-        # 4. Generate Charts
-        outcome_fig = go.Figure()
-        action_fig = go.Figure()
-        
-        if not responses_df.empty and "outcome" in responses_df.columns:
-            outcome_counts = responses_df["outcome"].value_counts()
-            outcome_fig = px.pie(values=outcome_counts.values, names=outcome_counts.index, title="Outcome Distribution", hole=0.4)
-            action_counts = responses_df["action"].value_counts()
-            action_fig = px.bar(x=action_counts.index, y=action_counts.values, title="Action Summary")
-        
-        outcome_fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=40, b=10))
-        action_fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=40, b=10))
-        
-        # 5. Generate Table Data
-        table_data = []
-        for _, row in track_df.iterrows():
-            subj_id = str(row.get('ID'))
-            asha_name = row.get('Asha_Worker')
-            notify_key = f"{asha_name}_{subj_id}"
-            last_notify = NOTIFIED_CACHE.get(notify_key, "Not Notified")
-            
-            subj_responses = responses_df[responses_df["ID"].astype(str) == subj_id] if not responses_df.empty else pd.DataFrame()
-            visit_count = len(subj_responses)
-            last_visit = subj_responses["visit_date"].iloc[-1] if not subj_responses.empty else "-"
-            status = subj_responses["outcome"].iloc[-1] if not subj_responses.empty else "Pending"
-            
-            row_dict = row.to_dict()
-            row_dict.update({"last_notified": last_notify, "visit_count": visit_count, "last_visit": last_visit, "status": status})
-            table_data.append(row_dict)
-
-        return (
-            str(total_alerts), 
-            f"{response_rate:.2f}%", 
-            f"{improvement_rate:.2f}%", 
-            outcome_fig, 
-            action_fig, 
-            table_data
-        )
-
-    except Exception as e:
-        print(f"ERROR in update_track_dashboard: {e}")
-        traceback.print_exc()
-        return "0", "0.00%", "0.00%", go.Figure(), go.Figure(), []
-
-@app.callback(
-    Output("track-details-container", "children"),
-    Input("track-table", "selected_rows"),
-    State("track-table", "data")
-)
-def update_track_details(selected_rows, table_data):
-    if not selected_rows or not table_data:
-        return get_track_details_layout(None)
-    
-    selected_id = table_data[selected_rows[0]]["ID"]
-    return get_track_details_layout(selected_id)
-
-@app.callback(
-    [Output("track-toast", "is_open"), Output("track-toast", "children"), Output("track-toast", "header"), Output("track-toast", "icon")],
-    Input("btn-submit-track", "n_clicks"),
-    [
-        State("track-table", "selected_rows"),
-        State("track-table", "data"),
-        State("track-visit-date", "date"),
-        State("track-action-dropdown", "value"),
-        State("track-outcome-dropdown", "value"),
-        State("track-compliance-dropdown", "value"),
-        State("track-remarks", "value")
-    ],
-    prevent_initial_call=True
-)
-def submit_track_response(n_clicks, selected_rows, table_data, visit_date, action, outcome, compliance, remarks):
-    if not selected_rows or not table_data:
-        return True, "Error: No subject selected.", "Error", "danger"
-    
-    if not all([visit_date, action, outcome, compliance]):
-        return True, "Please fill in all required fields (Date, Action, Outcome, Compliance).", "Missing Information", "warning"
-
-    selected_id = table_data[selected_rows[0]]["ID"]
-    
-    # Create new record
-    new_record = {
-        "ID": selected_id,
-        "visit_date": visit_date,
-        "action": action,
-        "outcome": outcome,
-        "compliance": compliance,
-        "remarks": remarks or "",
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    TRACKING_RESPONSES_CACHE.append(new_record)
-    save_tracking_responses()
-    
-    return True, f"Successfully logged ASHA visit for Subject {selected_id}.", "Success", "success"
 
 @app.callback(
     [
@@ -2405,7 +1849,7 @@ def submit_track_response(n_clicks, selected_rows, table_data, visit_date, actio
         Input("stored-data", "data"), Input("block-code-dropdown", "value"), Input("location-dropdown", "value"),
         Input("benificiery-dropdown", "value"),
         Input("anemia-dropdown", "value"), Input("interval", "n_intervals"),
-        Input("geospatial-map", "clickData"), Input("anemia-pie", "clickData"),
+        Input("map", "clickData"), Input("anemia-pie", "clickData"),
         Input("benificiery-bar", "clickData"), Input("btn-clear", "n_clicks"),
         Input("url", "pathname"), Input("reset-notification-trigger", "data"),
         Input("theme-store", "data")
@@ -3859,9 +3303,6 @@ def render_notification_queue(queue):
                         html.Div([
                             dbc.Button([html.I(className="fab fa-whatsapp me-2"), "Send"], 
                                        href=wa_link, target="_blank", color="success", size="sm", className="mb-2 w-100"),
-                            # dbc.Button([html.I(className="fas fa-robot me-2"), "Send (Business API)"], 
-                            #            id={"type": "send-business-api", "index": item["id"]}, 
-                            #            color="primary", size="sm", className="mb-2 w-100"),
                             dbc.Button("Remove", id={"type": "remove-queue", "index": item["id"]}, 
                                        color="secondary", outline=True, size="sm", className="w-100")
                         ])
@@ -3902,38 +3343,6 @@ def manage_queue(n_clear, n_removes, current_queue):
         return new_queue
         
     return no_update
-
-
-# # Callback to handle Business API Sending (Pattern Matching)
-# @app.callback(
-#     [Output("bulk-notify-toast", "is_open", allow_duplicate=True),
-#      Output("bulk-notify-toast", "children", allow_duplicate=True),
-#      Output("bulk-notify-toast", "icon", allow_duplicate=True)],
-#     Input({"type": "send-business-api", "index": ALL}, "n_clicks"),
-#     State("notification-queue-data", "data"),
-#     prevent_initial_call=True
-# )
-# def handle_business_api_send(n_clicks_list, current_queue):
-#     if not callback_context.triggered or not any(x for x in n_clicks_list if x):
-#         return no_update
-        
-#     triggered_id = callback_context.triggered_id
-#     if not isinstance(triggered_id, dict) or triggered_id.get("type") != "send-business-api":
-#         return no_update
-        
-#     target_id = triggered_id.get("index")
-#     # Finding the item in the queue
-#     item = next((i for i in current_queue if i["id"] == target_id), None)
-#     if not item:
-#         return True, "Item not found in queue", "danger"
-        
-#     # Call the helper (currently in draft/commented mode)
-#     success = send_whatsapp_message(item["contact"], item["msg"])
-    
-#     if success:
-#         return True, f"Success! Message triggered via Business API for {item['asha']}. (Currently in DRAFT/LOG mode)", "success"
-#     else:
-#         return True, f"Failed to send via Business API to {item['asha']}. Check your console logs.", "warning"
 
 # # Theme Toggle Logic
 # app.clientside_callback(
