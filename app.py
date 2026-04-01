@@ -813,7 +813,7 @@ def area_coordinates():
         'Marlanahalli': {'lat': 15.5771, 'lon': 76.6490},
         'Gouripur': {'lat': 15.6187547, 'lon': 76.35504569999999},
         'Hatti': {'lat': 15.2117, 'lon': 75.9350},
-        'Komalapur': {'lat': 15.3405, 'lon':76.0215},
+        'Komlapur': {'lat': 15.3405, 'lon':76.0215},
         'Chikwankal Kunta': {'lat': 15.629761351168723, 'lon':76.23304865792784},
         'Hire Wankal Kunta': {'lat': 15.646960083050104, 'lon':76.238318366376871},
         'Talkere': {'lat': 15.645466597713694, 'lon': 76.26477078258641},
