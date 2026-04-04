@@ -69,7 +69,7 @@ def mask_contact(val):
         return f"{s[:2]}{'X' * (len(s)-4)}{s[-2:]}"
     return "****"
 
-# =========================
+# ========================
 # DASH INIT
 # =========================
 app = dash.Dash(__name__, 
