@@ -382,7 +382,7 @@ def sync_data_to_sheets(df):
 
     sync_cols = [
         "SL.NO", "ID", "enrollment_date", "Area Code", "PSU Name", 
-        "Name", "Gender", "Benificiery", "HGB", "anemia_category",
+        "Name", "Gender", "Beneficiary", "HGB", "anemia_category",
         "Length", "Height", "Weight", "Age", "whatsapp",
         "Diet 1", "Diet 2", "field_investigator", "Asha_Worker", "data_operator",
         "Sample Collected Date", "bmi_category", "BMI", "Email", "Status"
@@ -508,7 +508,7 @@ def load_data():
 
         required_cols = [
             "Sl.No", "ID", "enrollment_date", "BlockCode", "Area Code", "PSU Name",
-            "Name", "Household Name", "Gender", "Benificiery", "Trimester", "DOB", "Age",
+            "Name", "Household Name", "Gender", "Beneficiary", "Trimester", "DOB", "Age",
             "sample_status", "Sample Collected Date", "Collected By",
             "HGB", "anemia_category", "field_investigator", "data_operator",
             "Asha_Worker", "Aasha_Contact", "Diet 1", "Diet 2", "benficiery qn",
@@ -572,7 +572,7 @@ def load_data():
         def classify_nutritional_status(row):
             bmi = row.get("BMI")
             age_y = row.get("Age")
-            beneficiary = str(row.get("Benificiery", "")).lower()
+            beneficiary = str(row.get("Beneficiary", "")).lower()
             gender_raw = str(row.get("Gender", "")).lower().strip()
             
             # Exemption: If pregnant and BMI >= 30, classify as Obese (pre-pregnancy proxy)
@@ -667,10 +667,10 @@ def load_data():
             cat_map = {"Normal": "normal", "Mild anemia": "mild", "Moderate anemia": "moderate", "Severe anemia": "severe"}
             df["anemia_category"] = df["anemia_category"].map(cat_map).fillna(df["anemia_category"].str.lower())
 
-        if "Benificiery" in df.columns:
-            df["Benificiery"] = pd.to_numeric(df["Benificiery"], errors='coerce')
-            df["Benificiery"] = df["Benificiery"].map(BENEFICIARY_MAP).fillna(df["Benificiery"])
-            df["Benificiery"] = df["Benificiery"].astype(str).str.title()
+        if "Beneficiary" in df.columns:
+            df["Beneficiary"] = pd.to_numeric(df["Beneficiary"], errors='coerce')
+            df["Beneficiary"] = df["Beneficiary"].map(BENEFICIARY_MAP).fillna(df["Beneficiary"])
+            df["Beneficiary"] = df["Beneficiary"].astype(str).str.title()
 
         if "BlockCode" in df.columns:
             # Clean and map Block Codes
@@ -709,7 +709,7 @@ def load_data():
                     row.get("HGB"),
                     row.get("Age"),
                     row.get("Gender"),
-                    row.get("Benificiery")
+                    row.get("Beneficiary")
                 ),
                 axis=1
             )
@@ -723,10 +723,10 @@ def load_data():
         # Check for valid Beneficiary (not None/NaN/empty/"Nan")
         # Since we converted to string title case earlier, check against "Nan" and "None" strings
         has_beneficiary = (
-            df["Benificiery"].notna() & 
-            (df["Benificiery"] != "") & 
-            (df["Benificiery"].str.lower() != "nan") & 
-            (df["Benificiery"].str.lower() != "none")
+            df["Beneficiary"].notna() & 
+            (df["Beneficiary"] != "") & 
+            (df["Beneficiary"].str.lower() != "nan") & 
+            (df["Beneficiary"].str.lower() != "none")
         )
         
         df = df[has_age | has_beneficiary]
@@ -935,7 +935,7 @@ def create_map(df, theme="dark"):
     
     # Calculate counts per PSU and Beneficiary
     psu_counts = map_df.groupby("PSU Name").size().to_dict() if not map_df.empty else {}
-    benif_breakdown = map_df.groupby(["PSU Name", "Benificiery"]).size().unstack(fill_value=0).to_dict('index') if not map_df.empty else {}
+    benif_breakdown = map_df.groupby(["PSU Name", "Beneficiary"]).size().unstack(fill_value=0).to_dict('index') if not map_df.empty else {}
     
     # --- Spiderification Logic (Jittering) ---
     # Add small deterministic offsets so overlapping subjects become visible on zoom
@@ -1215,7 +1215,7 @@ def get_treat_layout():
                 
                 html.Div([
                     html.Label("Beneficiary Type", className="sidebar-label"),
-                    dcc.Dropdown(id="benificiery-dropdown", options=[], multi=True, value=[], placeholder="All Beneficiaries"),
+                    dcc.Dropdown(id="Beneficiary-dropdown", options=[], multi=True, value=[], placeholder="All Beneficiaries"),
                 ], className="filter-group"),
 
                 html.Div([
@@ -1369,7 +1369,7 @@ def get_treat_layout():
             
             # Shared placeholders for Dashboard components (Exclude what Treat page HAS)
             *get_shared_placeholders([
-                "block-code-dropdown", "location-dropdown", "benificiery-dropdown", "anemia-dropdown", "btn-clear",
+                "block-code-dropdown", "location-dropdown", "Beneficiary-dropdown", "anemia-dropdown", "btn-clear",
                 "urgent-alerts-list", "total", "severe-count", "moderate-count", "mild-count", "avg-hgb", "map", 
                 "severe-table", "moderate-table", "mild-table", "table", "weekly-summary-container",
                 "theme-toggle-mobile"
@@ -1435,7 +1435,7 @@ def get_shared_placeholders(exclude_list):
         "diet-count": html.Div(id="diet-count", style={"display": "none"}),
         "prevalence-val": html.Div(id="prevalence-val", style={"display": "none"}),
         "map": dcc.Graph(id="map", style={"display": "none"}),
-        "benificiery-bar": dcc.Graph(id="benificiery-bar", style={"display": "none"}),
+        "Beneficiary-bar": dcc.Graph(id="Beneficiary-bar", style={"display": "none"}),
         "anemia-pie": dcc.Graph(id="anemia-pie", style={"display": "none"}),
         "anemia-village-bar": dcc.Graph(id="anemia-village-bar", style={"display": "none"}),
         "block-anemia-bar": dcc.Graph(id="block-anemia-bar", style={"display": "none"}),
@@ -1445,7 +1445,7 @@ def get_shared_placeholders(exclude_list):
         "table": dash_table.DataTable(id="table", style_header={"display": "none"}, style_cell={"display": "none"}),
         "block-code-dropdown": dcc.Dropdown(id="block-code-dropdown", style={"display": "none"}),
         "location-dropdown": dcc.Dropdown(id="location-dropdown", style={"display": "none"}),
-        "benificiery-dropdown": dcc.Dropdown(id="benificiery-dropdown", style={"display": "none"}),
+        "Beneficiary-dropdown": dcc.Dropdown(id="Beneficiary-dropdown", style={"display": "none"}),
         "anemia-dropdown": dcc.Dropdown(id="anemia-dropdown", style={"display": "none"}),
         "urgent-alerts-list": html.Div(id="urgent-alerts-list", style={"display": "none"}),
         "severe-table": dash_table.DataTable(id="severe-table", style_header={"display": "none"}, style_cell={"display": "none"}),
@@ -1508,7 +1508,7 @@ def get_dashboard_layout():
                 # Filter Groups
                 html.Div([
                     html.Label("Beneficiary Type", className="sidebar-label"),
-                    dcc.Dropdown(id="benificiery-dropdown", options=[], multi=True, value=[], placeholder="All Beneficiaries"),
+                    dcc.Dropdown(id="Beneficiary-dropdown", options=[], multi=True, value=[], placeholder="All Beneficiaries"),
                 ], className="filter-group"),
                 
                 html.Div([
@@ -1605,7 +1605,7 @@ def get_dashboard_layout():
                     
                     html.Div([
                         html.H5("Beneficiary Distribution", className="graph-title"),
-                        dcc.Graph(id="benificiery-bar", config={"responsive": True, "displayModeBar": False}, style={"height": "265px"}),
+                        dcc.Graph(id="Beneficiary-bar", config={"responsive": True, "displayModeBar": False}, style={"height": "265px"}),
                     ], className="graph-card")
                 ], xs=12, xl=4)
             ], className="mb-4 g-3"),
@@ -1682,8 +1682,8 @@ def get_dashboard_layout():
             
             # Shared placeholders for Treat Page components (Exclude what Dashboard page HAS)
             *get_shared_placeholders([
-                "block-code-dropdown", "location-dropdown", "benificiery-dropdown", "anemia-dropdown", "btn-clear", "btn-excel", "btn-csv",
-                "severe-count", "avg-hgb", "diet-count", "map", "benificiery-bar", "anemia-pie", 
+                "block-code-dropdown", "location-dropdown", "Beneficiary-dropdown", "anemia-dropdown", "btn-clear", "btn-excel", "btn-csv",
+                "severe-count", "avg-hgb", "diet-count", "map", "Beneficiary-bar", "anemia-pie", 
                 "anemia-village-bar", "block-anemia-bar", "block-prevalence-bar", "hgb-stats-bar", "bmi-bar", "table",
                 "prevalence-val", "normal-count", "mild-count", "moderate-count", "total"
             ])
@@ -1828,7 +1828,7 @@ def refresh_data(_):
         Output("mild-count", "children"), Output("avg-hgb", "children"),
         Output("diet-count", "children"),
         Output("prevalence-val", "children"),
-        Output("map", "figure"), Output("benificiery-bar", "figure"),
+        Output("map", "figure"), Output("Beneficiary-bar", "figure"),
         Output("anemia-pie", "figure"), Output("anemia-village-bar", "figure"),
         Output("hgb-stats-bar", "figure"),
         Output("bmi-bar", "figure"),
@@ -1836,9 +1836,9 @@ def refresh_data(_):
         Output("block-prevalence-bar", "figure"),
         Output("table", "data"), Output("table", "columns"),
         Output("block-code-dropdown", "options"), Output("location-dropdown", "options"),
-        Output("benificiery-dropdown", "options"), Output("anemia-dropdown", "options"),
+        Output("Beneficiary-dropdown", "options"), Output("anemia-dropdown", "options"),
         Output("block-code-dropdown", "value"), Output("location-dropdown", "value"),
-        Output("benificiery-dropdown", "value"), Output("anemia-dropdown", "value"),
+        Output("Beneficiary-dropdown", "value"), Output("anemia-dropdown", "value"),
         Output("urgent-alerts-list", "children"),
         Output("severe-table", "data"), Output("severe-table", "columns"),
         Output("moderate-table", "data"), Output("moderate-table", "columns"),
@@ -1847,24 +1847,24 @@ def refresh_data(_):
     ],
     [
         Input("stored-data", "data"), Input("block-code-dropdown", "value"), Input("location-dropdown", "value"),
-        Input("benificiery-dropdown", "value"),
+        Input("Beneficiary-dropdown", "value"),
         Input("anemia-dropdown", "value"), Input("interval", "n_intervals"),
         Input("map", "clickData"), Input("anemia-pie", "clickData"),
-        Input("benificiery-bar", "clickData"), Input("btn-clear", "n_clicks"),
+        Input("Beneficiary-bar", "clickData"), Input("btn-clear", "n_clicks"),
         Input("url", "pathname"), Input("reset-notification-trigger", "data"),
         Input("theme-store", "data")
     ]
 )
-def update_dashboard(stored_dict, block_code, location, benificiery, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, reset_trigger, theme):
+def update_dashboard(stored_dict, block_code, location, Beneficiary, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, reset_trigger, theme):
     try:
-        return internal_update_dashboard(stored_dict, block_code, location, benificiery, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, theme)
+        return internal_update_dashboard(stored_dict, block_code, location, Beneficiary, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, theme)
     except Exception as e:
         import traceback
         print(f"CRITICAL ERROR in update_dashboard: {str(e)}")
         print(traceback.format_exc())
         return [0]*8 + [go.Figure()]*8 + [[]]*18
 
-def internal_update_dashboard(stored_dict, block_code, location, benificiery, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, theme="dark"):
+def internal_update_dashboard(stored_dict, block_code, location, Beneficiary, anemia, n_intervals, map_click, pie_click, bar_click, n_clear, pathname, theme="dark"):
     t = THEME_CONFIG.get(theme, THEME_CONFIG["dark"])
     if not stored_dict or "records" not in stored_dict:
         # Return 30 elements to match the number of outputs
@@ -1909,13 +1909,13 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     print(f"\n>>> CALLBACK START: {triggered_id}")
     print(f">>> INPUT BLOCK: {block_code}")
     print(f">>> INPUT LOCATION: {location}")
-    print(f">>> INPUT BENIF: {benificiery}")
+    print(f">>> INPUT BENIF: {Beneficiary}")
     print(f">>> INPUT ANEMIA: {anemia}")
     
     # FORCED TYPE ENFORCEMENT
     block_code = [block_code] if isinstance(block_code, str) else (block_code or [])
     location = [location] if isinstance(location, str) else (location or [])
-    benificiery = [benificiery] if isinstance(benificiery, str) else (benificiery or [])
+    Beneficiary = [Beneficiary] if isinstance(Beneficiary, str) else (Beneficiary or [])
     anemia = [anemia] if isinstance(anemia, str) else (anemia or [])
     
     # TRACE LOGGING
@@ -1923,7 +1923,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     # Handle Chart Interactions (Cross-Filtering)
     if triggered_id == "btn-clear":
         print("DEBUG: Clearing all filters via button.")
-        block_code, location, benificiery, anemia = [], [], [], []
+        block_code, location, Beneficiary, anemia = [], [], [], []
         
     elif triggered_id == "map" and map_click:
         village_clicked = map_click["points"][0].get("text")
@@ -1943,11 +1943,11 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
             anemia = [cat_clicked]
             print(f"DEBUG: Anemia filter updated to: {anemia}")
 
-    elif triggered_id == "benificiery-bar" and bar_click:
+    elif triggered_id == "Beneficiary-bar" and bar_click:
         benif_clicked = bar_click["points"][0].get("x")
         if benif_clicked:
-            benificiery = [benif_clicked]
-            print(f"DEBUG: Beneficiary filter updated to: {benificiery}")
+            Beneficiary = [benif_clicked]
+            print(f"DEBUG: Beneficiary filter updated to: {Beneficiary}")
 
     driver_triggers = ["stored-data", "interval"]
     # We will always update the dashboard components to ensure they stay in sync with filters
@@ -1957,18 +1957,18 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     # 0. Block Code options: Filtered by others (less common to filter UP, but good for consistency)
     df_block = df_full.copy()
     if location: df_block = df_block[df_block["Location"].isin(location)]
-    if benificiery: df_block = df_block[df_block["Benificiery"].isin(benificiery)]
+    if Beneficiary: df_block = df_block[df_block["Beneficiary"].isin(Beneficiary)]
     if anemia: df_block = df_block[df_block["anemia_category"].isin(anemia)]
     
     block_opts = []
     if "BlockCode" in df_block.columns:
         block_opts = [{"label": x, "value": x} for x in sorted(df_block["BlockCode"].dropna().unique()) if x != "Missing"]
 
-    # 1. Location options: Filtered by Block, Benificiery, Anemia
+    # 1. Location options: Filtered by Block, Beneficiary, Anemia
     df_loc = df_full.copy()
     if block_code and "BlockCode" in df_loc.columns: 
         df_loc = df_loc[df_loc["BlockCode"].isin(block_code)]
-    if benificiery: df_loc = df_loc[df_loc["Benificiery"].isin(benificiery)]
+    if Beneficiary: df_loc = df_loc[df_loc["Beneficiary"].isin(Beneficiary)]
     if anemia: df_loc = df_loc[df_loc["anemia_category"].isin(anemia)]
     loc_opts = [{"label": x, "value": x} for x in sorted(df_loc["Location"].dropna().unique())]
     if not loc_opts:
@@ -1979,22 +1979,22 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         valid_locs = [o["value"] for o in loc_opts]
         location = [l for l in location if l in valid_locs]
 
-    # 2. Benificiery options: Filtered by Block, Location, Anemia
+    # 2. Beneficiary options: Filtered by Block, Location, Anemia
     df_benif = df_full.copy()
     if block_code and "BlockCode" in df_benif.columns: 
         df_benif = df_benif[df_benif["BlockCode"].isin(block_code)]
     if location: df_benif = df_benif[df_benif["Location"].isin(location)]
     if anemia: df_benif = df_benif[df_benif["anemia_category"].isin(anemia)]
-    benif_opts = [{"label": x, "value": x} for x in sorted(df_benif["Benificiery"].dropna().unique())]
+    benif_opts = [{"label": x, "value": x} for x in sorted(df_benif["Beneficiary"].dropna().unique())]
     if not benif_opts:
         benif_opts = [{"label": "No Results Found", "value": "none", "disabled": True}]
 
-    # 3. Anemia options: Filtered by Block, Location, Benificiery
+    # 3. Anemia options: Filtered by Block, Location, Beneficiary
     df_anemia_opts = df_full.copy()
     if block_code and "BlockCode" in df_anemia_opts.columns: 
         df_anemia_opts = df_anemia_opts[df_anemia_opts["BlockCode"].isin(block_code)]
     if location: df_anemia_opts = df_anemia_opts[df_anemia_opts["Location"].isin(location)]
-    if benificiery: df_anemia_opts = df_anemia_opts[df_anemia_opts["Benificiery"].isin(benificiery)]
+    if Beneficiary: df_anemia_opts = df_anemia_opts[df_anemia_opts["Beneficiary"].isin(Beneficiary)]
     # Normalize anemia categories to capitalize for label
     anemia_opts_raw = sorted(df_anemia_opts["anemia_category"].dropna().unique())
     anemia_opts = [{"label": x.capitalize(), "value": x} for x in anemia_opts_raw]
@@ -2008,7 +2008,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     if block_code and "BlockCode" in df_total.columns: 
         df_total = df_total[df_total["BlockCode"].isin(block_code)]
     if location: df_total = df_total[df_total["Location"].isin(location)]
-    if benificiery: df_total = df_total[df_total["Benificiery"].isin(benificiery)]
+    if Beneficiary: df_total = df_total[df_total["Beneficiary"].isin(Beneficiary)]
     if anemia: df_total = df_total[df_total["anemia_category"].str.lower().isin([x.lower() for x in anemia])]
     
     total = len(df_total)
@@ -2018,12 +2018,12 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     if block_code and "BlockCode" in df.columns: 
         df = df[df["BlockCode"].isin(block_code)]
     if location: df = df[df["Location"].isin(location)]
-    if benificiery: df = df[df["Benificiery"].isin(benificiery)]
+    if Beneficiary: df = df[df["Beneficiary"].isin(Beneficiary)]
     if anemia: 
         # Ensure case-insensitive matching for anemia category
         df = df[df["anemia_category"].str.lower().isin([x.lower() for x in anemia])]
 
-    print(f"DEBUG: Active Filters - Block: {block_code}, Loc: {location}, Benif: {benificiery}, Anemia: {anemia}")
+    print(f"DEBUG: Active Filters - Block: {block_code}, Loc: {location}, Benif: {Beneficiary}, Anemia: {anemia}")
     print(f"DEBUG: df length after filtering: {len(df)}")
     
     # Calculate Total Enrollment based on old logic (now using df_total)
@@ -2106,7 +2106,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
 
     table_order = [
         "Sl.No", "ID", "enrollment_date", "BlockCode", "Area Code", "PSU Name",
-        "Name", "Household Name", "Gender", "Benificiery", "Trimester", "DOB", "Age",
+        "Name", "Household Name", "Gender", "Beneficiary", "Trimester", "DOB", "Age",
         "Length", "Height", "Weight", "BMI", "bmi_category",
         "sample_status", "Sample Collected Date", "Collected By",
         "HGB", "anemia_category", "Asha_Worker", "whatsapp", 
@@ -2197,7 +2197,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     else:
         map_fig = create_map(df, theme=theme)
     
-    # Age-wise breakdown for Benificiery Hover
+    # Age-wise breakdown for Beneficiary Hover
     def get_age_bucket(age):
         if pd.isna(age): return "Missing"
         if age < 1: return f"{int(round(age*12))} Months"
@@ -2212,7 +2212,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     # Inverse map to get codes from names
     NAME_TO_CODE = {v: k for k, v in BENEFICIARY_MAP.items()}
 
-    benif_counts = df["Benificiery"].value_counts().sort_index()
+    benif_counts = df["Beneficiary"].value_counts().sort_index()
     age_hover_data = []
     labels_with_codes = []
     
@@ -2222,7 +2222,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         labels_with_codes.append(str(b_code))
         
         # Get age breakdown for hover
-        sub = df[df["Benificiery"] == b_group]
+        sub = df[df["Beneficiary"] == b_group]
         buckets = sub["Age"].apply(get_age_bucket).value_counts()
         b_str = "<br>".join([f"• {b}: {c}" for b, c in buckets.items()])
         
@@ -2476,10 +2476,10 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     )
     
     # BMI Distribution Bar Chart (Stacked by Beneficiary)
-    if "Benificiery" in df.columns and "bmi_category" in df.columns:
+    if "Beneficiary" in df.columns and "bmi_category" in df.columns:
         # Exclude Pregnant Women as they follow different clinical benchmarks
-        df_bmi = df[df["Benificiery"] != "Pregnant Women"]
-        bmi_ben_counts = df_bmi.groupby(["Benificiery", "bmi_category"]).size().unstack(fill_value=0)
+        df_bmi = df[df["Beneficiary"] != "Pregnant Women"]
+        bmi_ben_counts = df_bmi.groupby(["Beneficiary", "bmi_category"]).size().unstack(fill_value=0)
     else:
         bmi_ben_counts = pd.DataFrame()
 
@@ -2632,7 +2632,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
         {"name": "Subject ID", "id": "ID"},
         {"name": "Village", "id": "PSU Name"},
         {"name": "Hb Level", "id": "HGB"},
-        {"name": "Classification", "id": "Benificiery"},
+        {"name": "Classification", "id": "Beneficiary"},
         {"name": "Asha Worker", "id": "Asha_Worker"},
         {"name": "Reset", "id": "reset_btn", "presentation": "markdown"}
     ]
@@ -2842,7 +2842,7 @@ def internal_update_dashboard(stored_dict, block_code, location, benificiery, an
     print(f"DEBUG: FINAL RETURN -> Total: {total}, Prev: {prevalence_str}, Normal: {normal_kpi}")
     print(f"DEBUG: anemia_opts: {anemia_opts[:2]}... (len: {len(anemia_opts)})")
     
-    return (total, normal_kpi, moderate_kpi, severe_kpi, mild_kpi, avg_hgb, diet_yes, prevalence_str, map_fig, benif_bar, anemia_pie, anemia_village_bar, hgb_stats_fig, bmi_fig, block_fig, block_prev_fig, df_table.to_dict("records"), table_cols, block_opts, loc_opts, benif_opts, anemia_opts, block_code, location, benificiery, anemia, urgent_list, severe_data, treat_cols, moderate_data, treat_cols, mild_data, treat_cols, weekly_summary_content)
+    return (total, normal_kpi, moderate_kpi, severe_kpi, mild_kpi, avg_hgb, diet_yes, prevalence_str, map_fig, benif_bar, anemia_pie, anemia_village_bar, hgb_stats_fig, bmi_fig, block_fig, block_prev_fig, df_table.to_dict("records"), table_cols, block_opts, loc_opts, benif_opts, anemia_opts, block_code, location, Beneficiary, anemia, urgent_list, severe_data, treat_cols, moderate_data, treat_cols, mild_data, treat_cols, weekly_summary_content)
 
 
 # =========================
@@ -3067,7 +3067,7 @@ def handle_table_actions(severe_cell, moderate_cell, mild_cell, severe_data, mod
     Output("download-data", "data"),
     [Input("btn-excel", "n_clicks"), Input("btn-csv", "n_clicks")],
     [State("stored-data", "data"), State("block-code-dropdown", "value"), State("location-dropdown", "value"),
-     State("benificiery-dropdown", "value"), State("anemia-dropdown", "value")],
+     State("Beneficiary-dropdown", "value"), State("anemia-dropdown", "value")],
     prevent_initial_call=True
 )
 def export_data(n_excel, n_csv, stored_dict, block_code, location, benif, anemia):
@@ -3101,7 +3101,7 @@ def export_data(n_excel, n_csv, stored_dict, block_code, location, benif, anemia
         if location:
             df = df[df["Location"].isin(location)]
         if benif:
-            df = df[df["Benificiery"].isin(benif)]
+            df = df[df["Beneficiary"].isin(benif)]
         if anemia:
             anemia_lower = [str(x).lower() for x in anemia]
             df = df[df["anemia_category"].str.lower().isin(anemia_lower)]
@@ -3167,7 +3167,7 @@ def export_data(n_excel, n_csv, stored_dict, block_code, location, benif, anemia
      Output("notification-queue-data", "data", allow_duplicate=True)],
     Input("btn-bulk-notify", "n_clicks"),
     [State("stored-data", "data"), State("block-code-dropdown", "value"), State("location-dropdown", "value"),
-     State("benificiery-dropdown", "value"), State("anemia-dropdown", "value"),
+     State("Beneficiary-dropdown", "value"), State("anemia-dropdown", "value"),
      State("notification-queue-data", "data")],
     prevent_initial_call=True
 )
@@ -3197,7 +3197,7 @@ def trigger_bulk_notify(n, stored_dict, block_code, location, benif, anemia, cur
     
     if block_code: df = df[df["BlockCode"].isin(block_code)]
     if location: df = df[df["Location"].isin(location)]
-    if benif: df = df[df["Benificiery"].isin(benif)]
+    if benif: df = df[df["Beneficiary"].isin(benif)]
     
     # Filter for anemia - default to Moderate/Severe if no filter
     if anemia:
