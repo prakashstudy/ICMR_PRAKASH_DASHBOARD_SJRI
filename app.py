@@ -1303,7 +1303,7 @@ def get_treat_layout():
                            style={"marginBottom": "15px", "fontWeight": "700", "color": "var(--cat-severe-text)"}),
                     dash_table.DataTable(
                         id="severe-table",
-                        style_table={"overflowX": "auto", "borderRadius": "12px", "overflow": "hidden", "border": "1px solid var(--cat-severe-bg)"},
+                        style_table={"overflowX": "auto", "borderRadius": "12px", "border": "1px solid var(--cat-severe-bg)"},
                         style_cell={"padding": "12px", "textAlign": "left", "backgroundColor": "var(--table-cell-bg)", "color": "var(--table-cell-text)", "fontFamily": "var(--font-family)", "fontSize": "0.85rem"},
                         style_header={"backgroundColor": "var(--cat-severe-bg)", "fontWeight": "700", "color": "var(--cat-severe-text)", "borderBottom": "2px solid var(--cat-severe-text)"},
                         style_data_conditional=[
@@ -1317,6 +1317,10 @@ def get_treat_layout():
                                 'fontWeight': 'bold'
                             }
                         ],
+                        style_cell_conditional=[
+                            {'if': {'column_id': 'whatsapp'}, 'width': '100px', 'minWidth': '100px', 'maxWidth': '100px'},
+                            {'if': {'column_id': 'reset_btn'}, 'width': '80px', 'minWidth': '80px', 'maxWidth': '80px'}
+                        ],
                         page_size=15
                     )
                 ], className="graph-card premium-table", style={"marginBottom": "30px", "borderLeft": "5px solid var(--cat-severe-text)"}),
@@ -1327,7 +1331,7 @@ def get_treat_layout():
                     dash_table.DataTable(
                         id="moderate-table",
                         # className removed
-                        style_table={"overflowX": "auto", "borderRadius": "12px", "overflow": "hidden", "border": "1px solid var(--cat-moderate-bg)"},
+                        style_table={"overflowX": "auto", "borderRadius": "12px", "border": "1px solid var(--cat-moderate-bg)"},
                         style_cell={"padding": "12px", "textAlign": "left", "backgroundColor": "var(--table-cell-bg)", "color": "var(--table-cell-text)", "fontFamily": "var(--font-family)", "fontSize": "0.85rem"},
                         style_header={"backgroundColor": "var(--cat-moderate-bg)", "fontWeight": "700", "color": "var(--cat-moderate-text)", "borderBottom": "2px solid var(--cat-moderate-text)"},
                         style_data_conditional=[
@@ -1335,6 +1339,10 @@ def get_treat_layout():
                                 'if': {'row_index': 'odd'},
                                 'backgroundColor': 'var(--icon-bg)'
                             }
+                        ],
+                        style_cell_conditional=[
+                            {'if': {'column_id': 'whatsapp'}, 'width': '100px', 'minWidth': '100px', 'maxWidth': '100px'},
+                            {'if': {'column_id': 'reset_btn'}, 'width': '80px', 'minWidth': '80px', 'maxWidth': '80px'}
                         ],
                         page_size=15
                     )
@@ -1346,7 +1354,7 @@ def get_treat_layout():
                     dash_table.DataTable(
                         id="mild-table",
                         # className removed
-                        style_table={"overflowX": "auto", "borderRadius": "12px", "overflow": "hidden", "border": "1px solid var(--cat-mild-bg)"},
+                        style_table={"overflowX": "auto", "borderRadius": "12px", "border": "1px solid var(--cat-mild-bg)"},
                         style_cell={"padding": "12px", "textAlign": "left", "backgroundColor": "var(--table-cell-bg)", "color": "var(--table-cell-text)", "fontFamily": "var(--font-family)", "fontSize": "0.85rem"},
                         style_header={"backgroundColor": "var(--cat-mild-bg)", "fontWeight": "700", "color": "var(--cat-mild-text)", "borderBottom": "2px solid var(--cat-mild-text)"},
                         style_data_conditional=[
@@ -1354,6 +1362,10 @@ def get_treat_layout():
                                 'if': {'row_index': 'odd'},
                                 'backgroundColor': 'var(--icon-bg)'
                             }
+                        ],
+                        style_cell_conditional=[
+                            {'if': {'column_id': 'whatsapp'}, 'width': '100px', 'minWidth': '100px', 'maxWidth': '100px'},
+                            {'if': {'column_id': 'reset_btn'}, 'width': '80px', 'minWidth': '80px', 'maxWidth': '80px'}
                         ],
                         page_size=15
                     )
@@ -2136,14 +2148,16 @@ def internal_update_dashboard(stored_dict, block_code, location, Beneficiary, an
     def generate_wa_link(row):
         asha_name = row.get("Asha_Worker")
         # Use unmasked contact for WhatsApp link if available, otherwise fallback
-        contact = str(row.get("_real_contact", row.get("Aasha_Contact", "")))
+        raw_contact = str(row.get("_real_contact", row.get("Aasha_Contact", "")))
+        # IMPORTANT: Strip spaces/dashes/non-digits to prevent markdown link breakage
+        contact = "".join(filter(str.isdigit, raw_contact))
         cat = str(row.get("anemia_category", "")).lower()
         
         if cat in ["mild", "moderate", "severe"] and contact != "" and contact != "nan" and asha_name in asha_summaries:
             msg = asha_summaries[asha_name]
             encoded_msg = urllib.parse.quote(msg)
             link = f"https://wa.me/{contact}?text={encoded_msg}"
-            return f"[![WA](https://img.shields.io/badge/Notify-WhatsApp-25D366?style=flat-square&logo=whatsapp)]({link})"
+            return f"[![Notify WhatsApp](https://img.shields.io/badge/Notify-WhatsApp-25D366?style=flat-square&logo=whatsapp)]({link})"
         return ""
 
     # Apply to main dataframe so all tables benefit
@@ -2182,9 +2196,12 @@ def internal_update_dashboard(stored_dict, block_code, location, Beneficiary, an
         if col in df_table.columns:
             df_table[col] = pd.to_datetime(df_table[col], errors='coerce').dt.strftime('%d-%m-%Y').fillna("")
 
-    for col in df_table.columns:
-        if df_table[col].dtype == 'object':
-            df_table[col] = df_table[col].astype(str).str.title()
+    # date_cols_to_format = ["enrollment_date", "Sample Collected Date", "DOB"]
+    # ... logic handled earlier ...
+
+    # CAUTION: Removed global .str.title() loop on object columns 
+    # as it was corrupting 'whatsapp' markdown links and URLs.
+    # If specific columns need title-casing, they should be handled individually.
 
     # Ensure sequential Sl.No for current main table view
     df_table = df_table.reset_index(drop=True)
@@ -2630,6 +2647,8 @@ def internal_update_dashboard(stored_dict, block_code, location, Beneficiary, an
     treat_cols = [
         {"name": "Notify Asha", "id": "whatsapp", "presentation": "markdown"},
         {"name": "Subject ID", "id": "ID"},
+        {"name": "Name", "id": "Name"},
+        {"name": "Age", "id": "Age"},
         {"name": "Village", "id": "PSU Name"},
         {"name": "Hb Level", "id": "HGB"},
         {"name": "Classification", "id": "Beneficiary"},
